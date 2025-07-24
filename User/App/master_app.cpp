@@ -2,10 +2,14 @@
 #include "master_app.hpp"
 
 #include "TaskCPP.h"
+#include "arch.h"
 #include "cmsis_os2.h"
 #include "elog.h"
+#include "hptimer.hpp"
 #include "udp_task.h"
 #include "uwb_task.h"
+
+static const char *TAG = "master_app";
 
 extern void UWB_Task_Init(void);
 extern void UDP_Task_Init(void);
@@ -42,6 +46,6 @@ void BackendDataTransferTask::task() {
             UDP_SendData(uwb_rx_msg.data, uwb_rx_msg.data_len, "192.168.0.103",
                          9000);
         }
-        osDelay(10);
+        osDelay(100);
     }
 }

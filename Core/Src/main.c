@@ -22,6 +22,7 @@
 #include "dma.h"
 #include "lwip.h"
 #include "spi.h"
+#include "tim.h"
 #include "usart.h"
 #include "gpio.h"
 
@@ -101,6 +102,7 @@ int main(void)
   MX_DMA_Init();
   MX_SPI4_Init();
   MX_UART8_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
   elog_init();
 

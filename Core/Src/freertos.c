@@ -28,9 +28,9 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 
+#include "elog.h"
 #include "gpio.h"
 #include "usart.h"
-#include "elog.h"
 
 /* USER CODE END Includes */
 
@@ -61,6 +61,9 @@ const osThreadAttr_t defaultTask_attributes = {
     .priority = (osPriority_t)osPriorityNormal,
 };
 
+/* Private function prototypes -----------------------------------------------*/
+/* USER CODE BEGIN FunctionPrototypes */
+
 /* Definitions for elog */
 osThreadId_t elogHandle;
 uint32_t elogBuffer[512];
@@ -82,9 +85,6 @@ const osSemaphoreAttr_t elog_async_attributes = {.name = "elog_async"};
 /* Definitions for elog_dma_lock */
 osSemaphoreId_t elog_dma_lockHandle;
 const osSemaphoreAttr_t elog_dma_lock_attributes = {.name = "elog_dma_lock"};
-
-/* Private function prototypes -----------------------------------------------*/
-/* USER CODE BEGIN FunctionPrototypes */
 
 extern int main_app(void);
 extern void elog_entry(void *argument);
@@ -134,11 +134,13 @@ void MX_FREERTOS_Init(void) {
     /* creation of defaultTask */
     defaultTaskHandle =
         osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
-    /* creation of elog */
-    elogHandle = osThreadNew(elog_entry, NULL, &elog_attributes);
 
     /* USER CODE BEGIN RTOS_THREADS */
     /* add threads, ... */
+
+    /* creation of elog */
+    elogHandle = osThreadNew(elog_entry, NULL, &elog_attributes);
+    
     /* USER CODE END RTOS_THREADS */
 
     /* USER CODE BEGIN RTOS_EVENTS */
