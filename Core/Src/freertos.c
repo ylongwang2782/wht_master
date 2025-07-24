@@ -70,6 +70,7 @@ extern int main_app(void);
 
 void StartDefaultTask(void *argument);
 
+extern void MX_LWIP_Init(void);
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
 /**
@@ -79,7 +80,6 @@ void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
  */
 void MX_FREERTOS_Init(void) {
     /* USER CODE BEGIN Init */
-    main_app();
 
     /* USER CODE END Init */
 
@@ -121,11 +121,15 @@ void MX_FREERTOS_Init(void) {
  */
 /* USER CODE END Header_StartDefaultTask */
 void StartDefaultTask(void *argument) {
+    /* init code for LWIP */
+    MX_LWIP_Init();
     /* USER CODE BEGIN StartDefaultTask */
+    main_app();
 
     /* Infinite loop */
     for (;;) {
-        osDelay(100);
+        HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_0);
+        osDelay(500);
     }
     /* USER CODE END StartDefaultTask */
 }
