@@ -1,4 +1,4 @@
-#include "cmsis_os.h"
+#include "cmsis_os2.h"
 #include "deca_device_api.h"
 #include "deca_regs.h"
 #include "elog.h"

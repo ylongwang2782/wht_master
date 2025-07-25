@@ -2,12 +2,15 @@
 #include "master_app.hpp"
 
 #include "TaskCPP.h"
+#include "WhtsProtocol.h"
 #include "arch.h"
 #include "cmsis_os2.h"
 #include "elog.h"
 #include "hptimer.hpp"
 #include "udp_task.h"
 #include "uwb_task.h"
+
+using namespace WhtsProtocol;
 
 static const char *TAG = "master_app";
 
@@ -17,11 +20,35 @@ extern void UDP_Task_Init(void);
 // void Udp2uwb_Task_Init(void);
 
 BackendDataTransferTask backendDataTransferTask;
+
 extern "C" int main_app(void) {
+
+
+    // for (auto &fragment : commandData) {
+    //     UDP_SendData(fragment.data(), fragment.size(), "192.168.0.103",
+    //     9000);
+    // }
+
     UWB_Task_Init();    // 初始化UWB通信任务
     UDP_Task_Init();    // 初始化UDP通信任务
     // Udp2uwb_Task_Init();    // 初始化UDP到UWB的转换任务
     backendDataTransferTask.give();
+
+    ProtocolProcessor processor;
+    processor.setMTU(127);
+
+    auto syncCmd = std::make_unique<Master2Slave::SyncMessage>();
+    // 将当前时间转换为微秒时间戳
+    uint64_t timestampUs = hal_hptimer_get_us();
+    syncCmd->timestamp = timestampUs;
+    auto commandData = processor.packMaster2SlaveMessage(0xFFFFFFFF, *syncCmd);
+    // print commandData Info
+    elog_i(TAG, "commandData size: %d", commandData.size());
+    elog_i(TAG, "commandData[0] size: %d", commandData[0].size());
+    // elog_i(TAG, "commandData[0] data: %s", commandData[0].data());
+    UDP_SendData(commandData[0].data(), commandData[0].size(),
+                 "192.168.0.103", 9000);
+
 
     for (;;) {
         HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_0);
