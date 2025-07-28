@@ -12,10 +12,11 @@
         "--ranking-model=heuristics",
         "--query-driver=${env:ARM_CXX_PATH}"
     ],
-    "todo-tree.tree.showBadges": false,
+    "todo-tree.tree.showBadges": true,
     "files.associations": {
         "main.h": "c",
         "spi.h": "c",
         "cmsis_os.h": "c"
     },
+    "todo-tree.tree.disableCompactFolders": true,
 }

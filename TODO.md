@@ -3,4 +3,8 @@
 - [x] Scpp wrapper库
 - [x] fix: 修复当前运行约10分钟后死机的问题
 - [x] 移植hptiemr
-- [ ] 移植protocol
+- [x] 移植protocol
+- [ ] 移植master_app
+  - [x] 验证udp通信
+  - [ ] 验证uwb通信
+- [ ] 修复udp通讯经常性死机的问题

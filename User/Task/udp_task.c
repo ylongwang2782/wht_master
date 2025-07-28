@@ -32,7 +32,7 @@ typedef struct {
     struct sockaddr_in src_addr;    // 源地址
     uint16_t data_len;
     uint8_t data[UDP_BUFFER_SIZE];
-} rx_msg_t;
+} udp_rx_msg_t;
 
 // 全局变量
 static osMessageQueueId_t txQueue;    // 发送队列
@@ -40,7 +40,7 @@ static osMessageQueueId_t rxQueue;    // 接收队列
 static osThreadId_t udpTaskHandle;
 
 // 接收数据回调函数指针
-typedef void (*udp_rx_callback_t)(const rx_msg_t *msg);
+typedef void (*udp_rx_callback_t)(const udp_rx_msg_t *msg);
 static udp_rx_callback_t rx_callback = NULL;
 
 // UDP通信任务
@@ -51,7 +51,7 @@ void udp_comm_task(void *argument) {
     socklen_t client_addr_len = sizeof(client_addr);
     int recv_len;
     tx_msg_t tx_msg;
-    rx_msg_t rx_msg;
+    udp_rx_msg_t rx_msg;
 
     // 创建 socket
     sockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -125,7 +125,7 @@ void UDP_Task_Init(void) {
         return;
     }
 
-    rxQueue = osMessageQueueNew(RX_QUEUE_SIZE, sizeof(rx_msg_t), NULL);
+    rxQueue = osMessageQueueNew(RX_QUEUE_SIZE, sizeof(udp_rx_msg_t), NULL);
     if (rxQueue == NULL) {
         return;
     }
@@ -171,7 +171,7 @@ int UDP_SendData(const uint8_t *data, uint16_t len, const char *ip_addr,
 }
 
 // API函数：接收UDP数据（非阻塞）
-int UDP_ReceiveData(rx_msg_t *msg, uint32_t timeout_ms) {
+int UDP_ReceiveData(udp_rx_msg_t *msg, uint32_t timeout_ms) {
     if (msg == NULL) {
         return -1;
     }
@@ -200,7 +200,7 @@ void UDP_ClearTxQueue(void) {
 }
 
 void UDP_ClearRxQueue(void) {
-    rx_msg_t msg;
+    udp_rx_msg_t msg;
     while (osMessageQueueGet(rxQueue, &msg, NULL, 0) == osOK) {
         // 清空队列
     }

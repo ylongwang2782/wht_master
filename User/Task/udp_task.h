@@ -15,10 +15,10 @@ typedef struct {
     struct sockaddr_in src_addr;   // 源地址
     uint16_t data_len;
     uint8_t data[UDP_BUFFER_SIZE];
-} rx_msg_t;
+} udp_rx_msg_t;
 
 // 接收数据回调函数指针
-typedef void (*udp_rx_callback_t)(const rx_msg_t *msg);
+typedef void (*udp_rx_callback_t)(const udp_rx_msg_t *msg);
 
 // 初始化UDP通信任务
 void UDP_Task_Init(void);
@@ -31,7 +31,7 @@ int UDP_SendData(const uint8_t *data, uint16_t len, const char *ip_addr, uint16_
 // API函数：接收UDP数据（非阻塞）
 // 参数：msg - 接收消息缓冲区, timeout_ms - 超时时间（毫秒）
 // 返回：0 - 成功, -1 - 超时或错误
-int UDP_ReceiveData(rx_msg_t *msg, uint32_t timeout_ms);
+int UDP_ReceiveData(udp_rx_msg_t *msg, uint32_t timeout_ms);
 
 // API函数：设置接收回调函数
 // 参数：callback - 回调函数指针，当接收到数据时自动调用

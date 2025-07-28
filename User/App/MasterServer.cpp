@@ -1,0 +1,1459 @@
+#include "MasterServer.h"
+
+#include <algorithm>
+#include <vector>
+
+#include "MutexCPP.h"
+#include "QueueCPP.h"
+#include "SemaphoreCPP.h"
+#include "elog.h"
+#include "hptimer.hpp"
+#include "udp_task.h"
+#include "uwb_task.h"
+
+#define udpdataTransfer_STACK_SIZE 1024
+#define MAX_BUF_SIZE               100
+
+// MasterServer 构造函数实现
+MasterServer::MasterServer()
+    : pendingCommandsMutex("PendingCommandsMutex"),
+      lastSyncTime(0),
+      initialTimeSyncCompleted(false),
+      timeSyncMutex("TimeSyncMutex"),
+      controlMutex("ControlMutex") {
+    initializeMessageHandlers();
+    initializeSlave2MasterHandlers();
+
+    slaveDataProcessingTask = std::make_unique<SlaveDataProcT>(*this);
+    backendDataProcessingTask =
+        std::make_unique<BackDataProcT>(*this);
+    mainTask = std::make_unique<MainTask>(*this);
+}
+
+// MasterServer 析构函数实现
+MasterServer::~MasterServer() { elog_d(TAG, "MasterServer destroyed"); }
+
+void MasterServer::initializeMessageHandlers() {
+    messageHandlers_[static_cast<uint8_t>(
+        Backend2MasterMessageId::SLAVE_CFG_MSG)] =
+        &SlaveConfigHandler::getInstance();
+    messageHandlers_[static_cast<uint8_t>(
+        Backend2MasterMessageId::MODE_CFG_MSG)] =
+        &ModeConfigHandler::getInstance();
+    messageHandlers_[static_cast<uint8_t>(
+        Backend2MasterMessageId::SLAVE_RST_MSG)] = &ResetHandler::getInstance();
+    messageHandlers_[static_cast<uint8_t>(Backend2MasterMessageId::CTRL_MSG)] =
+        &ControlHandler::getInstance();
+    messageHandlers_[static_cast<uint8_t>(
+        Backend2MasterMessageId::PING_CTRL_MSG)] =
+        &PingControlHandler::getInstance();
+    messageHandlers_[static_cast<uint8_t>(
+        Backend2MasterMessageId::DEVICE_LIST_REQ_MSG)] =
+        &DeviceListHandler::getInstance();
+    messageHandlers_[static_cast<uint8_t>(
+        Backend2MasterMessageId::INTERVAL_CFG_MSG)] =
+        &IntervalConfigHandler::getInstance();
+}
+
+void MasterServer::initializeSlave2MasterHandlers() {
+    slave2MasterHandlers_[static_cast<uint8_t>(
+        Slave2MasterMessageId::ANNOUNCE_MSG)] = &AnnounceHandler::getInstance();
+    slave2MasterHandlers_[static_cast<uint8_t>(
+        Slave2MasterMessageId::SHORT_ID_CONFIRM_MSG)] =
+        &ShortIdConfirmHandler::getInstance();
+    slave2MasterHandlers_[static_cast<uint8_t>(
+        Slave2MasterMessageId::SET_TIME_RSP_MSG)] =
+        &SetTimeResponseHandler::getInstance();
+    slave2MasterHandlers_[static_cast<uint8_t>(
+        Slave2MasterMessageId::CONDUCTION_CFG_RSP_MSG)] =
+        &ConductionConfigResponseHandler::getInstance();
+    slave2MasterHandlers_[static_cast<uint8_t>(
+        Slave2MasterMessageId::RESISTANCE_CFG_RSP_MSG)] =
+        &ResistanceConfigResponseHandler::getInstance();
+    slave2MasterHandlers_[static_cast<uint8_t>(
+        Slave2MasterMessageId::CLIP_CFG_RSP_MSG)] =
+        &ClipConfigResponseHandler::getInstance();
+    slave2MasterHandlers_[static_cast<uint8_t>(
+        Slave2MasterMessageId::RST_RSP_MSG)] =
+        &ResetResponseHandler::getInstance();
+    slave2MasterHandlers_[static_cast<uint8_t>(
+        Slave2MasterMessageId::PING_RSP_MSG)] =
+        &PingResponseHandler::getInstance();
+    slave2MasterHandlers_[static_cast<uint8_t>(
+        Slave2MasterMessageId::SLAVE_CONTROL_RSP_MSG)] =
+        &SlaveControlResponseHandler::getInstance();
+}
+
+uint32_t MasterServer::getCurrentTimestamp() { return hal_hptimer_get_ms(); }
+
+void MasterServer::sendResponseToBackend(std::unique_ptr<Message> response) {
+    if (!response) {
+        elog_w(TAG, "sendResponseToBackend called with null response");
+        return;
+    }
+
+    elog_i(TAG, "Sending Master2Backend response: %s",
+           response->getMessageTypeName());
+    elog_v(TAG, "Starting message serialization...");
+
+    auto responseData = processor.packMaster2BackendMessage(*response);
+    elog_v(TAG, "Message serialization completed, %d fragments to send",
+           static_cast<int>(responseData.size()));
+
+    bool sendSuccess = true;
+    int fragmentIndex = 0;
+    for (auto &fragment : responseData) {
+        elog_v(TAG, "Sending fragment %d/%d (%d bytes)", fragmentIndex + 1,
+               static_cast<int>(responseData.size()),
+               static_cast<int>(fragment.size()));
+
+        if (!sendToBackend(fragment)) {
+            elog_e(TAG, "Failed to send response fragment %d/%d",
+                   fragmentIndex + 1, static_cast<int>(responseData.size()));
+            sendSuccess = false;
+            break;    // Stop sending remaining fragments on failure
+        } else {
+            elog_v(TAG, "Fragment %d/%d sent successfully", fragmentIndex + 1,
+                   static_cast<int>(responseData.size()));
+        }
+        fragmentIndex++;
+    }
+
+    if (sendSuccess) {
+        elog_v(TAG, "Master2Backend response sent to backend successfully");
+    } else {
+        elog_e(TAG, "Master2Backend response sending failed");
+    }
+}
+
+void MasterServer::sendCommandToSlave(uint32_t slaveId,
+                                      std::unique_ptr<Message> command) {
+    if (!command) return;
+
+    auto commandData = processor.packMaster2SlaveMessage(slaveId, *command);
+
+    elog_i(TAG, "Sending Master2Slave command to 0x%08X: %s", slaveId,
+           command->getMessageTypeName());
+
+    bool sendSuccess = true;
+    for (auto &fragment : commandData) {
+        if (!sendToSlave(fragment)) {
+            elog_e(TAG, "Failed to send command fragment");
+            sendSuccess = false;
+            break;    // 如果发送失败，不再尝试发送后续片段
+        }
+    }
+
+    // 如果发送失败，返回失败状态
+    if (!sendSuccess) {
+        elog_e(TAG, "Command send failed, aborting");
+        return;
+    }
+
+    elog_v(TAG, "Master2Slave command broadcasted to slaves");
+}
+
+void MasterServer::sendCommandToSlaveWithRetry(uint32_t slaveId,
+                                               std::unique_ptr<Message> command,
+
+                                               uint8_t maxRetries) {
+    // Create a pending command for retry management
+    PendingCommand pendingCmd(slaveId, std::move(command), maxRetries);
+    pendingCmd.timestamp = getCurrentTimestamp();
+
+    // Send the command immediately - create a copy by serializing and
+    // deserializing
+    auto serialized = pendingCmd.command->serialize();
+    auto messageCopy = processor.createMessage(
+        PacketId::MASTER_TO_SLAVE, pendingCmd.command->getMessageId());
+    if (messageCopy && messageCopy->deserialize(serialized)) {
+        sendCommandToSlave(slaveId, std::move(messageCopy));
+    }
+
+    // Add to pending commands list for retry management (with mutex protection)
+    {
+        Lock lock(pendingCommandsMutex);
+        pendingCommands.push_back(std::move(pendingCmd));
+    }
+
+    elog_v(TAG,
+           "Command sent to slave 0x%08X with retry support (max retries: %d)",
+           slaveId, maxRetries);
+}
+
+void MasterServer::processPendingCommands() {
+    // Lock the mutex to prevent race conditions with removePendingCommand
+    Lock lock(pendingCommandsMutex);
+
+    uint32_t currentTime = getCurrentTimestampMs();
+    constexpr uint32_t BASE_RETRY_TIMEOUT = 100;    // 基础重试超时时间 100ms
+
+    auto it = pendingCommands.begin();
+    while (it != pendingCommands.end()) {
+        // 使用指数退避算法计算重试超时时间
+        uint32_t retryTimeout =
+            BASE_RETRY_TIMEOUT * (1 << it->retryCount);    // 2^retryCount
+        constexpr uint32_t MAX_RETRY_TIMEOUT = 1000;
+        retryTimeout = std::min(retryTimeout, MAX_RETRY_TIMEOUT);
+
+        if (currentTime - it->timestamp > retryTimeout) {
+            if (it->retryCount < it->maxRetries) {
+                // Retry the command
+                it->retryCount++;
+                it->timestamp = currentTime;
+
+                // Create a copy of the command by serializing and deserializing
+                auto serialized = it->command->serialize();
+                auto messageCopy = processor.createMessage(
+                    PacketId::MASTER_TO_SLAVE, it->command->getMessageId());
+                if (messageCopy && messageCopy->deserialize(serialized)) {
+                    bool sendSuccess = false;
+                    // 尝试发送命令，如果UWB连续失败会返回false
+                    auto commandData = processor.packMaster2SlaveMessage(
+                        it->slaveId, *messageCopy);
+                    elog_v(TAG,
+                           "Retrying command to slave 0x%08X (attempt %d/%d)",
+                           it->slaveId, it->retryCount, it->maxRetries);
+
+                    sendSuccess = true;
+                    for (auto &fragment : commandData) {
+                        if (!sendToSlave(fragment)) {
+                            elog_e(
+                                TAG,
+                                "Failed to send command fragment during retry");
+                            sendSuccess = false;
+                            break;
+                        }
+                    }
+
+                    if (sendSuccess) {
+                        elog_v(TAG, "Command retry successful for slave 0x%08X",
+                               it->slaveId);
+                    }
+
+                    // 如果发送失败且已达到最大重试次数，直接移除命令
+                    if (!sendSuccess && it->retryCount >= it->maxRetries) {
+                        elog_w(TAG,
+                               "Command to slave 0x%08X failed after %d "
+                               "retries due to UWB errors",
+                               it->slaveId, it->maxRetries);
+
+                        it = pendingCommands.erase(it);
+                        continue;
+                    }
+                } else {
+                    elog_e(TAG,
+                           "Failed to create command copy for retry - "
+                           "messageId: 0x%02X, slaveId: 0x%08X",
+                           it->command->getMessageId(), it->slaveId);
+                }
+                ++it;
+            } else {
+                // Max retries reached, remove from pending list
+                elog_w(TAG, "Command to slave 0x%08X failed after %d retries",
+                       it->slaveId, it->maxRetries);
+
+                // 命令重试失败，移除待处理命令
+
+                it = pendingCommands.erase(it);
+            }
+        } else {
+            ++it;
+        }
+    }
+}
+
+void MasterServer::removePendingCommand(uint32_t slaveId,
+                                        uint8_t commandMessageId) {
+    // Lock the mutex to prevent race conditions with processPendingCommands
+    Lock lock(pendingCommandsMutex);
+
+    auto it = pendingCommands.begin();
+    while (it != pendingCommands.end()) {
+        if (it->slaveId == slaveId &&
+            it->command->getMessageId() == commandMessageId) {
+            elog_v(TAG,
+                   "Removing pending command for slave 0x%08X (msgId=0x%02X)",
+                   slaveId, commandMessageId);
+            it = pendingCommands.erase(it);
+            break;    // 只移除第一个匹配的命令
+        } else {
+            ++it;
+        }
+    }
+}
+
+void MasterServer::clearAllPendingCommands() {
+    // Lock the mutex to prevent race conditions
+    Lock lock(pendingCommandsMutex);
+
+    if (!pendingCommands.empty()) {
+        elog_v(TAG, "Clearing %d pending commands", pendingCommands.size());
+        pendingCommands.clear();
+    }
+}
+
+// Configuration response tracking methods
+void MasterServer::addPendingBackendResponse(
+    uint8_t messageType, std::unique_ptr<Message> originalMessage,
+    const std::vector<uint32_t> &targetSlaves) {
+    if (targetSlaves.empty()) {
+        elog_w(TAG, "No target slaves for backend response tracking");
+        return;
+    }
+
+    PendingBackendResponse pendingResponse(
+        messageType, std::move(originalMessage), targetSlaves);
+    pendingResponse.timestamp = getCurrentTimestampMs();
+
+    pendingBackendResponses.push_back(std::move(pendingResponse));
+
+    elog_v(TAG,
+           "Added pending backend response tracking for message type 0x%02X, "
+           "%d slaves",
+           messageType, static_cast<int>(targetSlaves.size()));
+}
+
+void MasterServer::processPendingBackendResponses() {
+    static bool processing = false;
+    static uint32_t lastProcessTime = 0;
+
+    // Prevent re-entry
+    if (processing) {
+        elog_v(TAG,
+               "processPendingBackendResponses already in progress, skipping");
+        return;
+    }
+
+    processing = true;
+
+    uint32_t currentTime = getCurrentTimestampMs();
+
+    // Add safety check to prevent getting stuck in this method
+    const uint32_t MAX_PROCESS_TIME = 5000;    // 5 seconds max processing time
+    if (lastProcessTime > 0 &&
+        (currentTime - lastProcessTime) > MAX_PROCESS_TIME) {
+        elog_w(TAG,
+               "processPendingBackendResponses taking too long, forcing exit");
+        processing = false;
+        return;
+    }
+    lastProcessTime = currentTime;
+
+    // if (!pendingBackendResponses.empty()) {
+    //     elog_v(TAG, "Processing %d pending backend responses",
+    //            static_cast<int>(pendingBackendResponses.size()));
+    // }
+
+    // Add protection against infinite loops
+    const int MAX_ITERATIONS = 10;
+    int iterationCount = 0;
+
+    auto it = pendingBackendResponses.begin();
+    while (it != pendingBackendResponses.end() &&
+           iterationCount < MAX_ITERATIONS) {
+        iterationCount++;
+        // elog_v(TAG, "Checking pending response: messageType=0x%02X,
+        // isComplete=%s, pendingSlaves=%d (iteration %d)",
+        //        it->messageType, it->isComplete() ? "true" : "false",
+        //        static_cast<int>(it->pendingSlaves.size()), iterationCount);
+
+        if (it->isComplete()) {
+            elog_i(TAG,
+                   "All slaves responded for message type 0x%02X, preparing "
+                   "response",
+                   it->messageType);
+
+            // All slaves have responded, send response to backend
+            std::unique_ptr<Message> response = nullptr;
+
+            switch (it->messageType) {
+                case static_cast<uint8_t>(
+                    Backend2MasterMessageId::MODE_CFG_MSG): {
+                    elog_v(TAG, "Processing MODE_CFG_MSG completion");
+                    elog_v(TAG,
+                           "Attempting to cast original message to "
+                           "ModeConfigMessage...");
+
+                    const auto *originalMsg =
+                        dynamic_cast<const Backend2Master::ModeConfigMessage *>(
+                            it->originalMessage.get());
+                    elog_v(TAG, "Dynamic cast completed, originalMsg = %p",
+                           originalMsg);
+
+                    if (originalMsg) {
+                        elog_v(TAG,
+                               "Original message cast successful, creating "
+                               "response...");
+
+                        auto modeResponse = std::make_unique<
+                            Master2Backend::ModeConfigResponseMessage>();
+                        elog_v(TAG,
+                               "Response object created, setting status and "
+                               "mode...");
+
+                        modeResponse->status = it->getOverallStatus();
+                        elog_v(TAG, "Status set to %d", modeResponse->status);
+
+                        modeResponse->mode = originalMsg->mode;
+                        elog_v(TAG, "Mode set to %d", modeResponse->mode);
+
+                        response = std::move(modeResponse);
+                        elog_v(TAG, "Response moved to response variable");
+
+                        elog_i(TAG,
+                               "Mode configuration completed for all slaves, "
+                               "status: %s",
+                               response->getMessageTypeName());
+                    } else {
+                        elog_e(TAG,
+                               "Failed to cast original message to "
+                               "ModeConfigMessage");
+                    }
+                    break;
+                }
+                case static_cast<uint8_t>(
+                    Backend2MasterMessageId::SLAVE_RST_MSG): {
+                    elog_v(TAG, "Processing SLAVE_RST_MSG completion");
+                    elog_v(
+                        TAG,
+                        "Attempting to cast original message to RstMessage...");
+
+                    const auto *originalMsg =
+                        dynamic_cast<const Backend2Master::RstMessage *>(
+                            it->originalMessage.get());
+                    elog_v(TAG, "Dynamic cast completed, originalMsg = %p",
+                           originalMsg);
+
+                    if (originalMsg) {
+                        elog_v(TAG,
+                               "Original message cast successful, creating "
+                               "response...");
+
+                        auto resetResponse = std::make_unique<
+                            Master2Backend::RstResponseMessage>();
+                        elog_v(TAG,
+                               "Response object created, setting status and "
+                               "slave info...");
+
+                        resetResponse->status = it->getOverallStatus();
+                        elog_v(TAG, "Overall status set to %d",
+                               resetResponse->status);
+
+                        resetResponse->slaveNum = originalMsg->slaveNum;
+                        elog_v(TAG, "Slave number set to %d",
+                               resetResponse->slaveNum);
+
+                        // Copy slave reset info with actual response status
+                        // from slaves
+                        elog_v(TAG, "Processing %d slaves in original message",
+                               static_cast<int>(originalMsg->slaves.size()));
+                        for (const auto &slave : originalMsg->slaves) {
+                            Master2Backend::RstResponseMessage::SlaveRstInfo
+                                slaveRstInfo;
+                            slaveRstInfo.id = slave.id;
+                            slaveRstInfo.lock = slave.lock;
+                            slaveRstInfo.clipStatus = slave.clipStatus;
+
+                            // Check if this slave actually responded
+                            auto statusIt = it->slaveStatuses.find(slave.id);
+                            if (statusIt != it->slaveStatuses.end()) {
+                                // Slave responded, use actual status
+                                elog_v(TAG,
+                                       "Slave 0x%08X responded with status %d",
+                                       slave.id, statusIt->second);
+                                // Note: The slave's individual status is
+                                // already included in the overall status
+                                // calculation The actual reset response from
+                                // slave contains the real status
+                            } else {
+                                // Slave didn't respond, mark as failed
+                                elog_w(TAG,
+                                       "Slave 0x%08X did not respond, marking "
+                                       "as failed",
+                                       slave.id);
+                                // For slaves that didn't respond, we keep the
+                                // original info but the overall status will be
+                                // error
+                            }
+
+                            resetResponse->slaves.push_back(slaveRstInfo);
+                            elog_v(TAG,
+                                   "Added slave info for 0x%08X (lock=%d, "
+                                   "clipStatus=0x%04X)",
+                                   slave.id, slave.lock, slave.clipStatus);
+                        }
+
+                        response = std::move(resetResponse);
+                        elog_v(TAG, "Response moved to response variable");
+
+                        elog_i(TAG,
+                               "Reset configuration completed for all slaves, "
+                               "status: %s",
+                               response->getMessageTypeName());
+                    } else {
+                        elog_e(TAG,
+                               "Failed to cast original message to RstMessage");
+                    }
+                    break;
+                }
+                // Add other message types as needed
+                default:
+                    elog_w(TAG,
+                           "Unknown message type 0x%02X in pending response",
+                           it->messageType);
+                    break;
+            }
+
+            if (response) {
+                elog_v(TAG,
+                       "Sending response to backend for message type 0x%02X",
+                       it->messageType);
+                sendResponseToBackend(std::move(response));
+                elog_v(TAG, "Response sent successfully");
+            } else {
+                elog_e(TAG, "Failed to create response for message type 0x%02X",
+                       it->messageType);
+            }
+
+            elog_v(TAG, "Removing completed pending response");
+            it = pendingBackendResponses.erase(it);
+            elog_v(TAG, "Pending response removed, %d remaining",
+                   static_cast<int>(pendingBackendResponses.size()));
+        } else if (it->isTimedOut(currentTime)) {
+            elog_w(TAG,
+                   "Backend response timeout for message type 0x%02X, %d "
+                   "slaves still pending",
+                   it->messageType, static_cast<int>(it->pendingSlaves.size()));
+
+            // Timeout, send error response
+            std::unique_ptr<Message> response = nullptr;
+
+            switch (it->messageType) {
+                case static_cast<uint8_t>(
+                    Backend2MasterMessageId::MODE_CFG_MSG): {
+                    const auto *originalMsg =
+                        dynamic_cast<const Backend2Master::ModeConfigMessage *>(
+                            it->originalMessage.get());
+                    if (originalMsg) {
+                        auto modeResponse = std::make_unique<
+                            Master2Backend::ModeConfigResponseMessage>();
+                        modeResponse->status = 1;    // Error due to timeout
+                        modeResponse->mode = originalMsg->mode;
+                        response = std::move(modeResponse);
+                    }
+                    break;
+                }
+                case static_cast<uint8_t>(
+                    Backend2MasterMessageId::SLAVE_RST_MSG): {
+                    elog_v(TAG, "Processing SLAVE_RST_MSG timeout");
+                    const auto *originalMsg =
+                        dynamic_cast<const Backend2Master::RstMessage *>(
+                            it->originalMessage.get());
+                    if (originalMsg) {
+                        elog_v(TAG,
+                               "Creating timeout response for reset command");
+                        auto resetResponse = std::make_unique<
+                            Master2Backend::RstResponseMessage>();
+                        resetResponse->status = 1;    // Error due to timeout
+                        resetResponse->slaveNum = originalMsg->slaveNum;
+
+                        // Copy slave reset info with timeout status
+                        elog_v(TAG, "Processing %d slaves for timeout response",
+                               static_cast<int>(originalMsg->slaves.size()));
+                        for (const auto &slave : originalMsg->slaves) {
+                            Master2Backend::RstResponseMessage::SlaveRstInfo
+                                slaveRstInfo;
+                            slaveRstInfo.id = slave.id;
+                            slaveRstInfo.lock = slave.lock;
+                            slaveRstInfo.clipStatus = slave.clipStatus;
+
+                            // Check if this slave responded before timeout
+                            auto statusIt = it->slaveStatuses.find(slave.id);
+                            if (statusIt != it->slaveStatuses.end()) {
+                                elog_v(TAG,
+                                       "Slave 0x%08X responded before timeout "
+                                       "with status %d",
+                                       slave.id, statusIt->second);
+                            } else {
+                                elog_w(TAG,
+                                       "Slave 0x%08X did not respond (timeout)",
+                                       slave.id);
+                            }
+
+                            resetResponse->slaves.push_back(slaveRstInfo);
+                        }
+                        response = std::move(resetResponse);
+                        elog_v(TAG, "Timeout response created successfully");
+                    } else {
+                        elog_e(TAG,
+                               "Failed to cast original message for timeout "
+                               "response");
+                    }
+                    break;
+                }
+            }
+
+            if (response) {
+                sendResponseToBackend(std::move(response));
+            }
+
+            it = pendingBackendResponses.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    if (iterationCount >= MAX_ITERATIONS) {
+        elog_w(TAG,
+               "processPendingBackendResponses reached maximum iterations "
+               "(%d), exiting to prevent infinite loop",
+               MAX_ITERATIONS);
+    }
+
+    // Reset the processing time when we successfully complete
+    lastProcessTime = 0;
+    processing = false;
+}
+
+void MasterServer::handleSlaveConfigResponse(uint32_t slaveId,
+                                             uint8_t messageType,
+                                             uint8_t status) {
+    // Find the corresponding pending backend response
+    for (auto &pendingResponse : pendingBackendResponses) {
+        // Check if this slave response matches any pending backend response
+        bool isMatch = false;
+
+        switch (pendingResponse.messageType) {
+            case static_cast<uint8_t>(Backend2MasterMessageId::MODE_CFG_MSG):
+                // Mode config responses can be conduction, resistance, or clip
+                // config responses
+                if (messageType ==
+                        static_cast<uint8_t>(
+                            Slave2MasterMessageId::CONDUCTION_CFG_RSP_MSG) ||
+                    messageType ==
+                        static_cast<uint8_t>(
+                            Slave2MasterMessageId::RESISTANCE_CFG_RSP_MSG) ||
+                    messageType ==
+                        static_cast<uint8_t>(
+                            Slave2MasterMessageId::CLIP_CFG_RSP_MSG)) {
+                    isMatch = true;
+                }
+                break;
+            case static_cast<uint8_t>(Backend2MasterMessageId::SLAVE_RST_MSG):
+                if (messageType ==
+                    static_cast<uint8_t>(Slave2MasterMessageId::RST_RSP_MSG)) {
+                    isMatch = true;
+                }
+                break;
+        }
+
+        if (isMatch && pendingResponse.pendingSlaves.count(slaveId) > 0) {
+            pendingResponse.markSlaveResponse(slaveId, status);
+            elog_v(TAG,
+                   "Marked slave 0x%08X response for backend message type "
+                   "0x%02X, status: %d, %d slaves remaining",
+                   slaveId, pendingResponse.messageType, status,
+                   static_cast<int>(pendingResponse.pendingSlaves.size()));
+            break;
+        }
+    }
+}
+
+void MasterServer::addPingSession(uint32_t targetId, uint8_t pingMode,
+                                  uint16_t totalCount, uint16_t interval,
+                                  std::unique_ptr<Message> originalMessage) {
+    // Create a new ping session
+    PingSession session(targetId, pingMode, totalCount, interval,
+                        std::move(originalMessage));
+    session.lastPingTime = getCurrentTimestampMs();
+
+    activePingSessions.push_back(std::move(session));
+
+    elog_v(TAG,
+           "Added ping session for target 0x%08X (mode=%d, count=%d, "
+           "interval=%dms)",
+           targetId, pingMode, totalCount, interval);
+}
+
+void MasterServer::processPingSessions() {
+    uint32_t currentTime = getCurrentTimestampMs();
+
+    auto it = activePingSessions.begin();
+    while (it != activePingSessions.end()) {
+        if (currentTime - it->lastPingTime >= it->interval) {
+            if (it->currentCount < it->totalCount) {
+                // Send ping command
+                auto pingCmd = std::make_unique<Master2Slave::PingReqMessage>();
+                pingCmd->sequenceNumber = it->currentCount + 1;
+                pingCmd->timestamp = currentTime;
+
+                sendCommandToSlave(it->targetId, std::move(pingCmd));
+
+                it->currentCount++;
+                it->lastPingTime = currentTime;
+
+                elog_v(TAG, "Sent ping %d/%d to target 0x%08X",
+                       it->currentCount, it->totalCount, it->targetId);
+                ++it;
+            } else {
+                // Ping session completed
+                elog_i(TAG,
+                       "Ping session completed for target 0x%08X (%d/%d "
+                       "successful)",
+                       it->targetId, it->successCount, it->totalCount);
+
+                // Send response to backend if we have the original message
+                if (it->originalMessage) {
+                    const auto *originalPingMsg =
+                        dynamic_cast<const Backend2Master::PingCtrlMessage *>(
+                            it->originalMessage.get());
+                    if (originalPingMsg) {
+                        auto response = std::make_unique<
+                            Master2Backend::PingResponseMessage>();
+                        response->pingMode = it->pingMode;
+                        response->totalCount = it->totalCount;
+                        response->successCount =
+                            it->successCount;    // Use actual success count
+                        response->destinationId = it->targetId;
+
+                        sendResponseToBackend(std::move(response));
+                        elog_i(TAG,
+                               "Sent ping response to backend for target "
+                               "0x%08X (%d/%d successful)",
+                               it->targetId, it->successCount, it->totalCount);
+                    }
+                }
+
+                it = activePingSessions.erase(it);
+            }
+        } else {
+            ++it;
+        }
+    }
+}
+
+void MasterServer::processBackend2MasterMessage(const Message &message) {
+    elog_i(TAG, "Received Backend2Master message: %s",
+           message.getMessageTypeName());
+
+    uint8_t messageId = message.getMessageId();
+    elog_v(TAG, "Processing Backend2Master message, ID: 0x%02X",
+           static_cast<int>(messageId));
+
+    IMessageHandler *handler = messageHandlers_[messageId];
+    if (handler) {
+        // Process message and generate response
+        auto response = handler->processMessage(message, this);
+
+        // Execute associated actions
+        handler->executeActions(message, this);
+
+        // Send response if generated
+        if (response) {
+            sendResponseToBackend(std::move(response));
+        } else {
+            elog_v(TAG, "No response needed for this Backend2Master message");
+        }
+    } else {
+        elog_w(TAG, "Unknown Backend2Master message type: 0x%02X",
+               static_cast<int>(messageId));
+    }
+}
+
+void MasterServer::processSlave2MasterMessage(uint32_t slaveId,
+                                              const Message &message) {
+    elog_i(TAG, "Received Slave2Master message from slave 0x%08X: %s", slaveId,
+           message.getMessageTypeName());
+
+    uint8_t messageId = message.getMessageId();
+    elog_v(TAG, "Processing Slave2Master message from slave 0x%08X, ID: 0x%02X",
+           slaveId, static_cast<int>(messageId));
+
+    ISlave2MasterMessageHandler *handler = slave2MasterHandlers_[messageId];
+    if (handler) {
+        // Process message and generate response
+        auto response = handler->processMessage(slaveId, message, this);
+
+        // Execute associated actions
+        handler->executeActions(slaveId, message, this);
+
+        // Send response if generated (currently no Slave2Master messages
+        // generate responses)
+        if (response) {
+            // If in the future we need to send responses back to slaves
+            // sendCommandToSlave(slaveId, std::move(response));
+            elog_v(TAG, "Response generated for Slave2Master message");
+        } else {
+            elog_v(TAG, "No response needed for this Slave2Master message");
+        }
+    } else {
+        elog_w(TAG, "Unknown Slave2Master message type: 0x%02X",
+               static_cast<int>(messageId));
+    }
+}
+
+void MasterServer::processFrame(Frame &frame) {
+    elog_v(TAG, "Processing frame - PacketId: 0x%02X, payload size: %d",
+           static_cast<int>(frame.packetId), frame.payload.size());
+
+    if (frame.packetId == static_cast<uint8_t>(PacketId::BACKEND_TO_MASTER)) {
+        std::unique_ptr<Message> backendMessage;
+        if (processor.parseBackend2MasterPacket(frame.payload,
+                                                backendMessage)) {
+            processBackend2MasterMessage(*backendMessage);
+        } else {
+            elog_e(TAG, "Failed to parse Backend2Master packet");
+        }
+    } else if (frame.packetId ==
+               static_cast<uint8_t>(PacketId::SLAVE_TO_MASTER)) {
+        uint32_t slaveId;
+        std::unique_ptr<Message> slaveMessage;
+        if (processor.parseSlave2MasterPacket(frame.payload, slaveId,
+                                              slaveMessage)) {
+            processSlave2MasterMessage(slaveId, *slaveMessage);
+        } else {
+            elog_e(TAG, "Failed to parse Slave2Master packet");
+        }
+    } else if (frame.packetId ==
+               static_cast<uint8_t>(PacketId::SLAVE_TO_BACKEND)) {
+        // 从机直接发送给后端的数据，主机需要解析slaveId并标记数据已接收，然后转发完整帧
+        uint32_t slaveId;
+        DeviceStatus deviceStatus;
+        std::unique_ptr<Message> slaveMessage;
+
+        if (processor.parseSlave2BackendPacket(frame.payload, slaveId,
+                                               deviceStatus, slaveMessage)) {
+            elog_i(TAG, "Received Slave2Backend message from slave 0x%08X: %s",
+                   slaveId, slaveMessage->getMessageTypeName());
+            elog_v(TAG,
+                   "Received Slave2Backend message from slave 0x%08X "
+                   "(msgId=0x%02X)",
+                   slaveId, slaveMessage->getMessageId());
+
+            // 更新设备最后通信时间
+            deviceManager.updateDeviceLastSeen(slaveId);
+
+            // 标记从机的数据已接收（用于数据采集周期管理）
+            deviceManager.markDataReceived(slaveId);
+
+            // Note: Removed old READ command handling logic as data is now
+            // pushed automatically by slaves instead of being pulled by master
+            // via READ commands
+
+            // 将完整的帧序列化后转发给后端
+            std::vector<uint8_t> completeFrame = frame.serialize();
+            if (sendToBackend(completeFrame)) {
+                elog_v(TAG,
+                       "Successfully forwarded complete Slave2Backend frame to "
+                       "backend (%d bytes)",
+                       completeFrame.size());
+            } else {
+                elog_e(TAG, "Failed to forward Slave2Backend frame to backend");
+            }
+        } else {
+            elog_e(
+                TAG,
+                "Failed to parse Slave2Backend packet (payload size: %d bytes)",
+                frame.payload.size());
+
+            // 添加调试信息：显示前几个字节的内容
+            if (frame.payload.size() > 0) {
+                std::string payloadHex;
+                for (size_t i = 0;
+                     i < std::min(frame.payload.size(), size_t(16)); ++i) {
+                    char buf[4];
+                    snprintf(buf, sizeof(buf), "%02X ", frame.payload[i]);
+                    payloadHex += buf;
+                }
+                elog_e(TAG, "Payload first 16 bytes: %s", payloadHex.c_str());
+            }
+        }
+    } else {
+        elog_w(TAG, "Unsupported packet type for Master: 0x%02X",
+               static_cast<int>(frame.packetId));
+    }
+}
+
+// 数据采集管理
+void MasterServer::startSlaveDataCollection() {
+    DeviceManager &dm = getDeviceManager();
+
+    // 获取所有已连接的从机
+    auto connectedSlaves = dm.getConnectedSlaves();
+
+    // 确定当前运行模式
+    uint8_t currentMode = dm.getCurrentMode();
+    Master2Slave::SlaveRunMode runMode;
+    switch (currentMode) {
+        case 0:
+            runMode = Master2Slave::SlaveRunMode::CONDUCTION_TEST;
+            break;
+        case 1:
+            runMode = Master2Slave::SlaveRunMode::RESISTANCE_TEST;
+            break;
+        case 2:
+            runMode = Master2Slave::SlaveRunMode::CLIP_TEST;
+            break;
+        default:
+            elog_w(TAG, "Unsupported mode: %d", currentMode);
+            return;
+    }
+
+    elog_i(TAG, "Found %d connected slaves for data collection start",
+           static_cast<int>(connectedSlaves.size()));
+
+    // 在发送启动指令前，确保所有从机都已经时间同步
+    elog_i(TAG,
+           "Ensuring all slaves are time synchronized before starting data "
+           "collection");
+    if (!ensureAllSlavesTimeSynced()) {
+        elog_w(TAG,
+               "Time synchronization failed for some slaves, but continuing "
+               "with data collection");
+    }
+
+    // 计算延迟启动时间：当前时间 + 300ms
+    uint64_t currentTimeUs = hal_hptimer_get_us();
+    uint64_t startTimeUs = currentTimeUs + 1000000;    // 1000ms = 1000,000 us
+
+    elog_i(TAG,
+           "Calculated synchronized start time: %lu us (current: %lu us, "
+           "delay: 1000ms)",
+           (unsigned long)startTimeUs, (unsigned long)currentTimeUs);
+
+    // 清空之前的控制请求
+    clearControlRequests();
+
+    // 向所有从机发送启动控制命令（延迟启动，确保同步）
+    int commandsSent = 0;
+    std::vector<uint32_t> targetSlaves;
+
+    for (uint32_t slaveId : connectedSlaves) {
+        if (dm.hasSlaveConfig(slaveId)) {
+            auto controlCmd =
+                std::make_unique<Master2Slave::SlaveControlMessage>();
+            controlCmd->mode = runMode;
+            controlCmd->enable = 1;                 // 启动
+            controlCmd->startTime = startTimeUs;    // 设置同步启动时间
+
+            elog_i(TAG,
+                   "Sending start control command to slave 0x%08X (mode: %d, "
+                   "enable: %d, startTime: %lu us)",
+                   slaveId, static_cast<int>(runMode), 1,
+                   (unsigned long)startTimeUs);
+
+            // 添加控制请求跟踪
+            addControlRequest(slaveId, startTimeUs);
+
+            sendCommandToSlaveWithRetry(slaveId, std::move(controlCmd), 3);
+            elog_i(TAG, "Sent start control command to slave 0x%08X", slaveId);
+            commandsSent++;
+            targetSlaves.push_back(slaveId);
+        } else {
+            elog_w(TAG, "Slave 0x%08X is connected but has no config", slaveId);
+        }
+    }
+
+    elog_i(TAG, "Slave data collection start commands sent to %d/%d slaves",
+           commandsSent, static_cast<int>(connectedSlaves.size()));
+
+    // 等待所有从机响应
+    if (!targetSlaves.empty()) {
+        elog_i(TAG, "Waiting for control responses from %d slaves...",
+               static_cast<int>(targetSlaves.size()));
+
+        bool allSuccess =
+            waitForAllControlResponses(targetSlaves, 2000);    // 等待2秒
+
+        if (allSuccess) {
+            elog_i(TAG, "All slaves confirmed control commands successfully");
+        } else {
+            elog_w(TAG,
+                   "Some slaves failed to confirm control commands, but "
+                   "continuing");
+        }
+    }
+
+    // 清理控制请求
+    clearControlRequests();
+}
+
+void MasterServer::stopSlaveDataCollection() {
+    DeviceManager &dm = getDeviceManager();
+
+    // 获取所有已连接的从机
+    auto connectedSlaves = dm.getConnectedSlaves();
+
+    elog_i(TAG, "Found %d connected slaves for data collection stop",
+           static_cast<int>(connectedSlaves.size()));
+
+    // 向所有从机发送停止控制命令
+    int commandsSent = 0;
+    for (uint32_t slaveId : connectedSlaves) {
+        if (dm.hasSlaveConfig(slaveId)) {
+            auto controlCmd =
+                std::make_unique<Master2Slave::SlaveControlMessage>();
+            controlCmd->mode =
+                Master2Slave::SlaveRunMode::CONDUCTION_TEST;    // 模式不重要
+            controlCmd->enable = 0;                             // 停止
+
+            sendCommandToSlaveWithRetry(slaveId, std::move(controlCmd), 3);
+            elog_i(TAG, "Sent stop control command to slave 0x%08X", slaveId);
+            commandsSent++;
+        } else {
+            elog_w(TAG, "Slave 0x%08X is connected but has no config", slaveId);
+        }
+    }
+
+    elog_i(TAG, "Slave data collection stop commands sent to %d/%d slaves",
+           commandsSent, static_cast<int>(connectedSlaves.size()));
+}
+
+void MasterServer::processTimeSync() {
+    DeviceManager &dm = getDeviceManager();
+
+    // 只有在系统运行时且已完成初始时间同步后才发送定时同步消息
+    if (dm.getSystemRunningStatus() != 1 || !initialTimeSyncCompleted) {
+        return;
+    }
+
+    uint32_t currentTime = getCurrentTimestampMs();
+
+    // 检查是否需要发送时间同步消息
+    if (currentTime - lastSyncTime >= SYNC_INTERVAL_MS) {
+        // 创建同步消息
+        auto syncCmd = std::make_unique<Master2Slave::SyncMessage>();
+        // 将当前时间转换为微秒时间戳
+        uint64_t timestampUs = hal_hptimer_get_us();
+        syncCmd->timestamp = timestampUs;
+
+        // 广播发送同步消息（使用0xFFFFFFFF作为广播地址）
+        sendCommandToSlave(0xFFFFFFFF, std::move(syncCmd));
+
+        lastSyncTime = currentTime;
+
+        elog_v(TAG,
+               "Broadcasted sync message for time synchronization "
+               "(timestamp=%lu us)",
+               (unsigned long)timestampUs);
+    }
+}
+
+bool MasterServer::ensureAllSlavesTimeSynced() {
+    DeviceManager &dm = getDeviceManager();
+
+    // 获取所有已连接的从机
+    auto connectedSlaves = dm.getConnectedSlaves();
+
+    if (connectedSlaves.empty()) {
+        elog_w(TAG, "No connected slaves found for time synchronization");
+        return true;    // 没有从机时认为同步成功
+    }
+
+    elog_i(TAG, "Starting sequential time synchronization for %d slaves",
+           static_cast<int>(connectedSlaves.size()));
+
+    // 清空之前的时间同步请求
+    clearTimeSyncRequests();
+
+    // 顺序为每个从机设置时间：发送 -> 等待响应 -> 下一个从机
+    int syncedCount = 0;
+    int currentIndex = 0;
+    for (uint32_t slaveId : connectedSlaves) {
+        currentIndex++;
+        elog_i(TAG, "Starting time sync for slave 0x%08X (%d/%d)", slaveId,
+               currentIndex, static_cast<int>(connectedSlaves.size()));
+
+        if (sendSetTimeToSlave(slaveId)) {
+            syncedCount++;
+            elog_i(TAG, "✓ Time sync successful for slave 0x%08X", slaveId);
+        } else {
+            elog_w(TAG, "✗ Time sync failed for slave 0x%08X", slaveId);
+        }
+
+        // 添加小延迟避免消息冲突
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+
+    // 清理完成的时间同步请求
+    clearTimeSyncRequests();
+
+    elog_i(TAG, "Time synchronization completed: %d/%d slaves synced",
+           syncedCount, static_cast<int>(connectedSlaves.size()));
+
+    // 标记初始时间同步已完成
+    initialTimeSyncCompleted = true;
+
+    return syncedCount == static_cast<int>(connectedSlaves.size());
+}
+
+bool MasterServer::sendSetTimeToSlave(uint32_t slaveId) {
+    // 创建SetTime消息
+    auto setTimeCmd = std::make_unique<Master2Slave::SetTimeMessage>();
+    // 将当前时间转换为微秒时间戳
+    uint64_t timestampUs = hal_hptimer_get_us();
+    setTimeCmd->timestamp = timestampUs;
+
+    elog_i(TAG, "Sending set time message to slave 0x%08X (timestamp=%lu us)",
+           slaveId, (unsigned long)timestampUs);
+
+    // 添加时间同步请求跟踪
+    addTimeSyncRequest(slaveId, timestampUs);
+
+    // 发送命令
+    sendCommandToSlaveWithRetry(slaveId, std::move(setTimeCmd), 3);
+
+    // 等待响应
+    bool success = waitForTimeSyncResponse(slaveId, 1000);    // 等待1秒
+
+    if (success) {
+        elog_i(TAG, "Time sync successful for slave 0x%08X", slaveId);
+    } else {
+        elog_w(TAG, "Time sync failed or timeout for slave 0x%08X", slaveId);
+    }
+
+    return success;
+}
+
+// 时间同步响应管理方法
+void MasterServer::addTimeSyncRequest(uint32_t slaveId, uint64_t timestamp) {
+    Lock lock(timeSyncMutex);
+    uint32_t currentTime = getCurrentTimestampMs();
+    pendingTimeSyncRequests.emplace_back(slaveId, timestamp, currentTime);
+
+    elog_v(TAG, "Added time sync request for slave 0x%08X (timestamp=%lu us)",
+           slaveId, (unsigned long)timestamp);
+}
+
+void MasterServer::markTimeSyncResponse(uint32_t slaveId, bool success) {
+    Lock lock(timeSyncMutex);
+
+    for (auto &request : pendingTimeSyncRequests) {
+        if (request.slaveId == slaveId && !request.responseReceived) {
+            request.responseReceived = true;
+            request.success = success;
+            elog_v(TAG, "Marked time sync response for slave 0x%08X: %s",
+                   slaveId, success ? "success" : "failed");
+            break;
+        }
+    }
+}
+
+bool MasterServer::waitForTimeSyncResponse(uint32_t slaveId,
+                                           uint32_t timeoutMs) {
+    uint32_t startTime = getCurrentTimestampMs();
+
+    while ((getCurrentTimestampMs() - startTime) < timeoutMs) {
+        {
+            Lock lock(timeSyncMutex);
+            for (const auto &request : pendingTimeSyncRequests) {
+                if (request.slaveId == slaveId && request.responseReceived) {
+                    return request.success;
+                }
+            }
+        }
+
+        // 短暂延迟避免过度占用CPU
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+
+    elog_w(TAG, "Time sync response timeout for slave 0x%08X", slaveId);
+    return false;
+}
+
+void MasterServer::clearTimeSyncRequests() {
+    Lock lock(timeSyncMutex);
+    pendingTimeSyncRequests.clear();
+    elog_v(TAG, "Cleared all pending time sync requests");
+}
+
+// 控制消息响应管理方法
+void MasterServer::addControlRequest(uint32_t slaveId, uint64_t startTime) {
+    Lock lock(controlMutex);
+    uint32_t currentTime = getCurrentTimestampMs();
+    pendingControlRequests.emplace_back(slaveId, startTime, currentTime);
+
+    elog_v(TAG, "Added control request for slave 0x%08X (startTime=%lu us)",
+           slaveId, (unsigned long)startTime);
+}
+
+void MasterServer::markControlResponse(uint32_t slaveId, bool success) {
+    Lock lock(controlMutex);
+
+    for (auto &request : pendingControlRequests) {
+        if (request.slaveId == slaveId && !request.responseReceived) {
+            request.responseReceived = true;
+            request.success = success;
+            elog_v(TAG, "Marked control response for slave 0x%08X: %s", slaveId,
+                   success ? "success" : "failed");
+            break;
+        }
+    }
+}
+
+bool MasterServer::waitForAllControlResponses(
+    const std::vector<uint32_t> &slaveIds, uint32_t timeoutMs) {
+    uint32_t startTime = getCurrentTimestampMs();
+
+    while ((getCurrentTimestampMs() - startTime) < timeoutMs) {
+        bool allReceived = true;
+        int successCount = 0;
+
+        {
+            Lock lock(controlMutex);
+            for (uint32_t slaveId : slaveIds) {
+                bool found = false;
+                for (const auto &request : pendingControlRequests) {
+                    if (request.slaveId == slaveId) {
+                        found = true;
+                        if (!request.responseReceived) {
+                            allReceived = false;
+                            break;
+                        } else if (request.success) {
+                            successCount++;
+                        }
+                        break;
+                    }
+                }
+                if (!found) {
+                    allReceived = false;
+                    break;
+                }
+            }
+        }
+
+        if (allReceived) {
+            elog_i(TAG, "All control responses received: %d/%d successful",
+                   successCount, static_cast<int>(slaveIds.size()));
+            return successCount == static_cast<int>(slaveIds.size());
+        }
+
+        // 短暂延迟避免过度占用CPU
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+
+    elog_w(TAG, "Control response timeout for some slaves");
+    return false;
+}
+
+void MasterServer::clearControlRequests() {
+    Lock lock(controlMutex);
+    pendingControlRequests.clear();
+    elog_v(TAG, "Cleared all pending control requests");
+}
+
+void MasterServer::processDataCollection() {}
+
+bool MasterServer::sendToBackend(std::vector<uint8_t> &frame) {
+    // 数据通过UDP_SendData发送
+    if (UDP_SendData(frame.data(), frame.size(), "192.168.0.103", 9000) == 0) {
+        elog_i(TAG, "sendToBackend success");
+        return true;
+    } else {
+        elog_e(TAG, "sendToBackend failed");
+        return false;
+    }
+}
+
+bool MasterServer::sendToSlave(std::vector<uint8_t> &frame) {
+    static uint32_t consecutiveFailures = 0;
+    static uint32_t lastFailureTime = 0;
+    const uint32_t MAX_CONSECUTIVE_FAILURES = 10;     // 最大连续失败次数
+    const uint32_t FAILURE_RESET_INTERVAL = 30000;    // 30秒后重置失败计数
+
+    uint32_t currentTime = getCurrentTimestampMs();
+
+    // 如果距离上次失败超过30秒，重置失败计数
+    if (currentTime - lastFailureTime > FAILURE_RESET_INTERVAL) {
+        consecutiveFailures = 0;
+    }
+
+    // 如果连续失败次数过多，暂时停止发送
+    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        elog_w(TAG,
+               "Too many consecutive UWB failures (%d), temporarily stopping "
+               "transmission",
+               consecutiveFailures);
+        return false;
+    }
+
+    // send data by uwb
+    if (UWB_SendData(frame.data(), frame.size(), 0) == 0) {
+        elog_i(TAG, "sendToSlave success");
+    } else {
+        elog_e(TAG, "sendToSlave failed");
+        return false;
+    }
+
+    // 发送成功，重置失败计数
+    consecutiveFailures = 0;
+    return true;
+}
+
+bool MasterServer::checkAndRecoverUWBHealth() {
+    static uint32_t lastHealthCheck = 0;
+    static uint32_t uwbResetCount = 0;
+    const uint32_t HEALTH_CHECK_INTERVAL = 60000;    // 60秒检查一次
+
+    uint32_t currentTime = getCurrentTimestampMs();
+
+    // 定期健康检查
+    if (currentTime - lastHealthCheck < HEALTH_CHECK_INTERVAL) {
+        return true;    // 还未到检查时间
+    }
+
+    lastHealthCheck = currentTime;
+
+    // 检查是否有过多的UWB失败
+    // 这里可以添加更多的健康检查逻辑
+
+    elog_i(TAG, "UWB health check completed, reset count: %d", uwbResetCount);
+    return true;
+}
+
+// SlaveDataProcT 实现
+MasterServer::SlaveDataProcT::SlaveDataProcT(
+    MasterServer &parent)
+    : TaskClassS("SlaveDataProcT", TaskPrio_Mid), parent(parent) {}
+
+void MasterServer::SlaveDataProcT::task() {
+    elog_i(TAG, "SlaveDataProcT started");
+    uwb_rx_msg_t msg;
+    for (;;) {
+        // if (UWB_ReceiveData(&msg, 0) == 0) {
+        //     // Process received data
+        //     // msg.data contains the actual UWB frame data
+        //     // msg.data_len contains frame length
+
+        //     elog_v(TAG, "SlaveDataProcT recvData size: %d",
+        //            msg.data_len);
+        //     // copy msg.data to recvData
+        //     recvData.assign(msg.data, msg.data + msg.data_len);
+
+        //     if (!recvData.empty()) {
+        //         // process recvData
+        //         parent.processor.processReceivedData(recvData);
+
+        //         // process complete frame
+        //         Frame receivedFrame;
+        //         while (parent.processor.getNextCompleteFrame(receivedFrame)) {
+        //             parent.processFrame(receivedFrame);
+        //         }
+        //         recvData.clear();
+        //     }
+        // }
+        TaskBase::delay(1);
+    }
+}
+
+// BackDataProcT 实现
+MasterServer::BackDataProcT::BackDataProcT(
+    MasterServer &parent)
+    : TaskClassS("BackDataProcT", TaskPrio_Mid), parent(parent) {}
+
+void MasterServer::BackDataProcT::task() {
+    elog_i(TAG, "BackDataProcT started");
+    udp_rx_msg_t msg;
+    for (;;) {
+        if (UDP_ReceiveData(&msg, 0) == 0) {
+            // Process received data
+            // msg.data contains the actual UWB frame data
+            // msg.data_len contains frame length
+
+            // copy msg.data to recvData
+            recvData.assign(msg.data, msg.data + msg.data_len);
+
+            if (!recvData.empty()) {
+                elog_v(TAG, "Backend recvData size: %d", recvData.size());
+                parent.processor.processReceivedData(recvData);
+                Frame receivedFrame;
+                while (parent.processor.getNextCompleteFrame(receivedFrame)) {
+                    // 只处理来自后端的消息，不处理转发的从机数据
+                    if (receivedFrame.packetId ==
+                        static_cast<uint8_t>(PacketId::BACKEND_TO_MASTER)) {
+                        parent.processFrame(receivedFrame);
+                    } else {
+                        elog_w(
+                            TAG,
+                            "Ignoring non-backend frame (PacketId: 0x%02X) to "
+                            "prevent loopback",
+                            static_cast<int>(receivedFrame.packetId));
+                    }
+                }
+                recvData.clear();
+            }
+        }
+        TaskBase::delay(1);
+    }
+}
+
+// MainTask 实现
+MasterServer::MainTask::MainTask(MasterServer &parent)
+    : TaskClassS("MainTask", TaskPrio_High), parent(parent) {}
+
+void MasterServer::MainTask::task() {
+    elog_i(TAG, "MainTask started and running");
+
+    uint32_t lastDeviceStatusCheck = 0;
+    uint32_t deviceStatusCheckInterval =
+        30000;    // Check device status every 30 seconds
+
+    for (;;) {
+        uint32_t currentTime = getCurrentTimestampMs();
+
+        // Process pending commands, ping sessions, and data collection
+        parent.processPendingCommands();
+        parent.processPingSessions();
+        parent.processPendingBackendResponses();
+
+        // Process data collection (simplified for push-based architecture)
+        if (parent.getDeviceManager().isDataCollectionActive()) {
+            // Data collection is now handled by slaves automatically pushing
+            // data No complex state management needed here
+        }
+
+        parent.processDataCollection();
+        parent.processTimeSync();
+
+        // 定期检查设备在线状态
+        if (currentTime - lastDeviceStatusCheck >= deviceStatusCheckInterval) {
+            parent.getDeviceManager().updateDeviceOnlineStatus();
+            lastDeviceStatusCheck = currentTime;
+        }
+
+        // 定期检查UWB模块健康状态
+        parent.checkAndRecoverUWBHealth();
+
+        TaskBase::delay(1);
+    }
+}
+
+// MasterServer run方法实现
+void MasterServer::run() {
+    elog_d(TAG, "Starting MasterServer...");
+
+    // 创建并启动从机数据处理任务
+    if (slaveDataProcessingTask) {
+        slaveDataProcessingTask->give();
+        elog_d(TAG, "SlaveDataProcT started");
+    }
+
+    // 创建并启动后端数据处理任务
+    if (backendDataProcessingTask) {
+        backendDataProcessingTask->give();
+        elog_d(TAG, "BackDataProcT started");
+    }
+
+    // 创建并启动主任务
+    if (mainTask) {
+        mainTask->give();
+        elog_d(TAG, "MainTask started");
+    }
+
+    // 主循环
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_0);
+    }
+}

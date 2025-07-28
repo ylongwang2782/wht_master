@@ -140,7 +140,7 @@ void MX_FREERTOS_Init(void) {
 
     /* creation of elog */
     elogHandle = osThreadNew(elog_entry, NULL, &elog_attributes);
-    
+
     /* USER CODE END RTOS_THREADS */
 
     /* USER CODE BEGIN RTOS_EVENTS */
