@@ -133,7 +133,7 @@ void UDP_Task_Init(void) {
     // 创建UDP通信任务
     const osThreadAttr_t udpTask_attributes = {
         .name = "udpCommTask",
-        .stack_size = 512 * 4,
+        .stack_size = 1024 * 4,
         .priority = (osPriority_t)osPriorityNormal,
     };
     udpTaskHandle = osThreadNew(udp_comm_task, NULL, &udpTask_attributes);

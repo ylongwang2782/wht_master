@@ -1,10 +1,11 @@
 // #include "slave_app.h"
 #include "master_app.hpp"
 
+#include "MasterServer.h"
 #include "cmsis_os2.h"
 #include "udp_task.h"
 #include "uwb_task.h"
-#include "MasterServer.h"
+#include "elog.h"
 
 using namespace WhtsProtocol;
 
@@ -18,9 +19,13 @@ extern "C" int main_app(void) {
     MasterServer masterServer;
     masterServer.run();
 
+    uint8_t data[10] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
     for (;;) {
+
+        UDP_SendData(data, 10, "192.168.0.107", 8080);
         HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_0);
-        osDelay(500);
+        elog_v("master_app", "Hello World");
+        osDelay(100);
     }
     return 0;
 }

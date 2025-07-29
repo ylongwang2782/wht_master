@@ -1451,8 +1451,12 @@ void MasterServer::run() {
         elog_d(TAG, "MainTask started");
     }
 
+    uint8_t data[10] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+
     // 主循环
     while (1) {
+        UDP_SendData(data, 10, "192.168.0.107", 8080);
+        elog_i(TAG, "send data to backend");
         vTaskDelay(pdMS_TO_TICKS(100));
         HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_0);
     }
