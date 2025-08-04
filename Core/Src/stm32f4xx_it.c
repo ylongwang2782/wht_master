@@ -22,6 +22,7 @@
 #include "stm32f4xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "elog.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -85,32 +86,37 @@ void NMI_Handler(void)
 /**
   * @brief This function handles Hard fault interrupt.
   */
-void HardFault_Handler(void)
-{
-  /* USER CODE BEGIN HardFault_IRQn 0 */
-
-  /* USER CODE END HardFault_IRQn 0 */
-  while (1)
+  void HardFault_Handler(void)
   {
-    /* USER CODE BEGIN W1_HardFault_IRQn 0 */
-    /* USER CODE END W1_HardFault_IRQn 0 */
+    /* USER CODE BEGIN HardFault_IRQn 0 */
+    elog_e("FAULT", "!!! HardFault occurred !!!");
+    /* USER CODE END HardFault_IRQn 0 */
+    while (1)
+    {
+      /* USER CODE BEGIN W1_HardFault_IRQn 0 */
+      // toglle led fast blink
+      HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
+      for (int i = 0; i < 1000000; i++) {
+      }
+      /* USER CODE END W1_HardFault_IRQn 0 */
+    }
   }
-}
 
 /**
   * @brief This function handles Memory management fault.
   */
-void MemManage_Handler(void)
-{
-  /* USER CODE BEGIN MemoryManagement_IRQn 0 */
-
-  /* USER CODE END MemoryManagement_IRQn 0 */
-  while (1)
+  void MemManage_Handler(void)
   {
-    /* USER CODE BEGIN W1_MemoryManagement_IRQn 0 */
-    /* USER CODE END W1_MemoryManagement_IRQn 0 */
+    /* USER CODE BEGIN MemoryManagement_IRQn 0 */
+    elog_e("FAULT", "!!! MemManage occurred !!!");
+  
+    /* USER CODE END MemoryManagement_IRQn 0 */
+    while (1)
+    {
+      /* USER CODE BEGIN W1_MemoryManagement_IRQn 0 */
+      /* USER CODE END W1_MemoryManagement_IRQn 0 */
+    }
   }
-}
 
 /**
   * @brief This function handles Pre-fetch fault, memory access fault.
