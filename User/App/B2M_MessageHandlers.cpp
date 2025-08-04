@@ -4,6 +4,7 @@
 
 #include "elog.h"
 #include "MasterServer.h"
+#include "master_app.hpp"
 
 // Slave Configuration Message Handler
 std::unique_ptr<Message> SlaveConfigHandler::processMessage(
@@ -140,7 +141,7 @@ void ModeConfigHandler::executeActions(const Message &message,
                         auto condCmd = std::make_unique<
                             Master2Slave::ConductionConfigMessage>();
                         condCmd->timeSlot = 1;
-                        condCmd->interval = 20;    // 20ms default
+                        condCmd->interval = INTERVAL;    // 20ms default
                         condCmd->totalConductionNum = totalConductionNum;
                         condCmd->startConductionNum = currentConductionStart;
                         condCmd->conductionNum = slaveConfig.conductionNum;
