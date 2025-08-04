@@ -1,10 +1,12 @@
+#include "uwb_task.h"
+
 #include "cmsis_os2.h"
 #include "deca_device_api.h"
 #include "deca_regs.h"
 #include "elog.h"
 #include "port.h"
+#include <string.h>
 
-#define FRAME_LEN_MAX 127
 #define TX_QUEUE_SIZE 10
 #define RX_QUEUE_SIZE 10
 
@@ -23,14 +25,6 @@ typedef struct {
     uint32_t delay_ms;    // 发送延迟时间
 } uwb_tx_msg_t;
 
-// UWB接收消息结构体
-typedef struct {
-    uint16_t data_len;
-    uint8_t data[FRAME_LEN_MAX];
-    uint32_t timestamp;     // 接收时间戳
-    uint32_t status_reg;    // 状态寄存器值
-} uwb_rx_msg_t;
-
 // 全局变量
 static osMessageQueueId_t uwb_txQueue;    // UWB发送队列
 static osMessageQueueId_t uwb_rxQueue;    // UWB接收队列
@@ -39,10 +33,6 @@ static osThreadId_t uwbCommTaskHandle;
 // 接收数据回调函数指针
 typedef void (*uwb_rx_callback_t)(const uwb_rx_msg_t *msg);
 static uwb_rx_callback_t uwb_rx_callback = NULL;
-
-// Forward declaration for UDP communication
-extern int UDP_SendData(const uint8_t *data, uint16_t len, const char *ip_addr,
-                        uint16_t port);
 
 /* Default communication configuration. */
 static dwt_config_t config = {
@@ -53,8 +43,8 @@ static dwt_config_t config = {
     9,                  // TX前导码索引：通道5/64MHz下推荐用9
     9,                  // RX前导码索引：与TX一致
     0,                  // 使用标准SFD：标准SFD解码鲁棒性更好
-    DWT_BR_110K,        // 数据速率：110Kbps最稳定，误码率最低
-    DWT_PHRMODE_STD,    // 标准PHY头
+    DWT_BR_850K,        // 数据速率：110Kbps最稳定，误码率最低
+    DWT_PHRMODE_EXT,    // 标准PHY头
     (1025 + 64 - 32)    // SFD超时时间：可按 PLEN + margin 设置
 };
 
@@ -81,8 +71,8 @@ static void uwb_comm_task(void *argument) {
     dwt_configure(&config);
     elog_i(TAG, "dwt_configure success");
 
-    uint32_t device_id = dwt_readdevid();
-    elog_i(TAG, "device_id: %08X", device_id);
+    // uint32_t device_id = dwt_readdevid();
+    // elog_i(TAG, "device_id: %08X", device_id);
 
     // 启动接收模式
     dwt_rxenable(DWT_START_RX_IMMEDIATE);
@@ -98,7 +88,7 @@ static void uwb_comm_task(void *argument) {
                     // DW1000会自动添加2字节CRC，所以实际写入的数据长度是用户数据长度
                     // 但是dwt_writetxfctrl需要包含CRC的总长度
                     dwt_writetxdata(tx_msg.data_len + 2, tx_msg.data, 0);
-                    dwt_writetxfctrl(tx_msg.data_len + 2, 0, 0);
+                    dwt_writetxfctrl(tx_msg.data_len + 2, 0, 1);
                     dwt_starttx(DWT_START_TX_IMMEDIATE);
 
                     // 等待发送完成
@@ -134,12 +124,12 @@ static void uwb_comm_task(void *argument) {
         // 检查是否有接收数据
         status_reg = dwt_read32bitreg(SYS_STATUS_ID);
         if (status_reg & (SYS_STATUS_RXFCG | SYS_STATUS_ALL_RX_ERR)) {
-            elog_i(TAG, "status_reg: %08X", status_reg);
+            // elog_i(TAG, "status_reg: %08X", status_reg);
             if (status_reg & SYS_STATUS_RXFCG) {
                 // 成功接收到数据
                 frame_len =
                     dwt_read32bitreg(RX_FINFO_ID) & RX_FINFO_RXFL_MASK_1023;
-                elog_i(TAG, "frame_len: %d", frame_len);
+                // elog_i(TAG, "frame_len: %d", frame_len);
 
                 // frame_len包含2字节CRC，需要减去CRC长度得到实际数据长度
                 if (frame_len >= 2 && frame_len <= FRAME_LEN_MAX) {
@@ -197,7 +187,7 @@ void UWB_Task_Init(void) {
     // 创建UWB通信任务
     const osThreadAttr_t uwbTask_attributes = {
         .name = "uwbCommTask",
-        .stack_size = 512 * 4,
+        .stack_size = 512 * 16,
         .priority = (osPriority_t)osPriorityNormal,
     };
     uwbCommTaskHandle = osThreadNew(uwb_comm_task, NULL, &uwbTask_attributes);
@@ -220,10 +210,8 @@ int UWB_SendData(const uint8_t *data, uint16_t len, uint32_t delay_ms) {
     msg.data_len = len;
     msg.delay_ms = delay_ms;
 
-    // 手动复制数据
-    for (int i = 0; i < len; i++) {
-        msg.data[i] = data[i];
-    }
+    // use memcpy instead
+    memcpy(msg.data, data, len);
 
     // 发送到队列
     if (osMessageQueuePut(uwb_txQueue, &msg, 0, 100) != osOK) {

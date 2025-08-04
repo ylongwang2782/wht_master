@@ -99,7 +99,7 @@ class MasterServer {
     /**
      * 后端到主机数据处理任务类 (处理从后端接收到的数据)
      */
-    class SlaveDataProcT : public TaskClassS<512> {
+    class SlaveDataProcT : public TaskClassS<2048> {
        public:
         SlaveDataProcT(MasterServer &parent);
 
@@ -113,7 +113,7 @@ class MasterServer {
     /**
      * 从机到主机数据处理任务类 (处理从从机接收到的数据)
      */
-    class BackDataProcT : public TaskClassS<512> {
+    class BackDataProcT : public TaskClassS<2048> {
        public:
         BackDataProcT(MasterServer &parent);
 

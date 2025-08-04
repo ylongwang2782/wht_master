@@ -24,6 +24,8 @@ MasterServer::MasterServer()
     initializeMessageHandlers();
     initializeSlave2MasterHandlers();
 
+    processor.setMTU(FRAME_LEN_MAX);
+
     slaveDataProcessingTask = std::make_unique<SlaveDataProcT>(*this);
     backendDataProcessingTask = std::make_unique<BackDataProcT>(*this);
     mainTask = std::make_unique<MainTask>(*this);
