@@ -1,6 +1,7 @@
 #include "MasterServer.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <vector>
 
 #include "MutexCPP.h"
@@ -818,58 +819,8 @@ void MasterServer::processFrame(Frame &frame) {
         }
     } else if (frame.packetId ==
                static_cast<uint8_t>(PacketId::SLAVE_TO_BACKEND)) {
-        // 从机直接发送给后端的数据，主机需要解析slaveId并标记数据已接收，然后转发完整帧
-        uint32_t slaveId;
-        DeviceStatus deviceStatus;
-        std::unique_ptr<Message> slaveMessage;
-
-        if (processor.parseSlave2BackendPacket(frame.payload, slaveId,
-                                               deviceStatus, slaveMessage)) {
-            elog_i(TAG, "Received Slave2Backend message from slave 0x%08X: %s",
-                   slaveId, slaveMessage->getMessageTypeName());
-            elog_v(TAG,
-                   "Received Slave2Backend message from slave 0x%08X "
-                   "(msgId=0x%02X)",
-                   slaveId, slaveMessage->getMessageId());
-
-            // 更新设备最后通信时间
-            deviceManager.updateDeviceLastSeen(slaveId);
-
-            // 标记从机的数据已接收（用于数据采集周期管理）
-            deviceManager.markDataReceived(slaveId);
-
-            // Note: Removed old READ command handling logic as data is now
-            // pushed automatically by slaves instead of being pulled by master
-            // via READ commands
-
-            // 将完整的帧序列化后转发给后端
-            std::vector<uint8_t> completeFrame = frame.serialize();
-            if (sendToBackend(completeFrame)) {
-                elog_v(TAG,
-                       "Successfully forwarded complete Slave2Backend frame to "
-                       "backend (%d bytes)",
-                       completeFrame.size());
-            } else {
-                elog_e(TAG, "Failed to forward Slave2Backend frame to backend");
-            }
-        } else {
-            elog_e(
-                TAG,
-                "Failed to parse Slave2Backend packet (payload size: %d bytes)",
-                frame.payload.size());
-
-            // 添加调试信息：显示前几个字节的内容
-            if (frame.payload.size() > 0) {
-                std::string payloadHex;
-                for (size_t i = 0;
-                     i < std::min(frame.payload.size(), size_t(16)); ++i) {
-                    char buf[4];
-                    snprintf(buf, sizeof(buf), "%02X ", frame.payload[i]);
-                    payloadHex += buf;
-                }
-                elog_e(TAG, "Payload first 16 bytes: %s", payloadHex.c_str());
-            }
-        }
+        // SLAVE_TO_BACKEND帧现在在SlaveDataProcT中直接透传，这里不再处理
+        elog_v(TAG, "SLAVE_TO_BACKEND frame ignored in processFrame (handled in SlaveDataProcT)");
     } else {
         elog_w(TAG, "Unsupported packet type for Master: 0x%02X",
                static_cast<int>(frame.packetId));
@@ -1323,14 +1274,52 @@ void MasterServer::SlaveDataProcT::task() {
             recvData.assign(msg.data, msg.data + msg.data_len);
 
             if (!recvData.empty()) {
-                // process recvData
-                parent.processor.processReceivedData(recvData);
+                // 检查是否为SLAVE_TO_BACKEND帧，如果是则直接透传
+                bool hasSlaveToBackendFrame = false;
+                size_t pos = 0;
+                while (pos < recvData.size()) {
+                    // 查找帧头
+                    size_t frameStart = parent.processor.findFrameHeader(recvData, pos);
+                    if (frameStart == SIZE_MAX) {
+                        break; // 没有找到更多帧头
+                    }
+                    
+                    // 检查帧长度是否足够
+                    if (frameStart + 7 > recvData.size()) {
+                        break; // 帧头不完整
+                    }
+                    
+                    // 检查PacketId是否为SLAVE_TO_BACKEND
+                    uint8_t packetId = recvData[frameStart + 2];
+                    if (packetId == static_cast<uint8_t>(PacketId::SLAVE_TO_BACKEND)) {
+                        // 找到SLAVE_TO_BACKEND帧，直接透传原始数据
+                        hasSlaveToBackendFrame = true;
+                        elog_v(TAG, "Found SLAVE_TO_BACKEND frame, forwarding raw data");
+                        
+                        // 直接透传原始接收数据给后端
+                        if (parent.sendToBackend(recvData)) {
+                            elog_v(TAG, "Successfully forwarded raw SLAVE_TO_BACKEND data to backend (%d bytes)", recvData.size());
+                        } else {
+                            elog_e(TAG, "Failed to forward raw SLAVE_TO_BACKEND data to backend");
+                        }
+                        break; // 找到SLAVE_TO_BACKEND帧后直接透传，不再处理其他帧
+                    }
+                    
+                    // 移动到下一个位置继续查找
+                    pos = frameStart + 1;
+                }
+                
+                // 如果不是SLAVE_TO_BACKEND帧，则按原来的逻辑处理
+                if (!hasSlaveToBackendFrame) {
+                    // process recvData
+                    parent.processor.processReceivedData(recvData);
 
-                // process complete frame
-                Frame receivedFrame;
-                while (parent.processor.getNextCompleteFrame(receivedFrame))
-                {
-                    parent.processFrame(receivedFrame);
+                    // process complete frame
+                    Frame receivedFrame;
+                    while (parent.processor.getNextCompleteFrame(receivedFrame))
+                    {
+                        parent.processFrame(receivedFrame);
+                    }
                 }
 
                 recvData.clear();

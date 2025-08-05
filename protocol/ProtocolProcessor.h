@@ -119,6 +119,9 @@ class ProtocolProcessor {
     bool parseMaster2BackendPacket(const std::vector<uint8_t> &payload,
                                    std::unique_ptr<Message> &message);
 
+    // 查找帧头 (公有方法，用于直接透传检测)
+    size_t findFrameHeader(const std::vector<uint8_t> &buffer, size_t startPos);
+
   private:
     // 帧分片
     std::vector<std::vector<uint8_t>>
@@ -130,9 +133,6 @@ class ProtocolProcessor {
 
     // 从接收缓冲区中提取完整帧
     bool extractCompleteFrames();
-
-    // 查找帧头
-    size_t findFrameHeader(const std::vector<uint8_t> &buffer, size_t startPos);
 
     // 工具函数
     void writeUint16LE(std::vector<uint8_t> &buffer, uint16_t value);
