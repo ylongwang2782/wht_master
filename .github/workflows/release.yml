@@ -1,0 +1,90 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  packages: write
+  actions: write
+  id-token: write
+
+jobs:
+  build-and-release:
+    name: Build Firmware and Create Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup CMake
+        uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: "3.29.2"
+
+      - name: Setup Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v4
+        with:
+          version: "1.12.1"
+
+      - name: Setup ARM GCC
+        uses: carlosperate/arm-none-eabi-gcc-action@v1
+        with:
+          release: "14.2.Rel1"
+
+      - name: Build Firmware
+        shell: bash
+        run: |
+          cmake --preset debug
+          cmake --build --preset debug
+
+      - name: Get Version from Git
+        id: get_version
+        shell: bash
+        run: |
+          # 获取最新的 tag，如果没有则使用 commit hash
+          if git describe --tags --abbrev=0 2>/dev/null; then
+            VERSION=$(git describe --tags --abbrev=0)
+            VERSION=${VERSION#v} # 移除前缀 v
+          else
+            VERSION=$(git rev-parse --short HEAD)
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Prepare Release Assets
+        shell: bash
+        run: |
+          cp build/debug/wht_master.hex wht_master_v${VERSION}.hex
+          echo "FIRMWARE_NAME=wht_master_v${VERSION}.hex" >> $GITHUB_ENV
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.get_version.outputs.version }}
+          name: Release v${{ steps.get_version.outputs.version }}
+          body: |
+            ## Firmware Release v${{ steps.get_version.outputs.version }}
+            
+            ### Changes
+            - Built from commit: ${{ github.sha }}
+            - Branch: ${{ github.ref_name }}
+            
+            ### Assets
+            - `wht_master_v${{ steps.get_version.outputs.version }}.hex` - Firmware binary
+          files: wht_master_v${{ steps.get_version.outputs.version }}.hex
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Clean Build Directory
+        shell: bash
+        run: rm -rf build/*
