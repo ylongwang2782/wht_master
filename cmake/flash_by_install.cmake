@@ -13,14 +13,23 @@ set(OPENOCD_EXECUTABLE "openocd")
 # halt; program ${EXECUTABLE_OUTPUT_PATH}/${EXECUTABLE_NAME}.elf reset\" -c
 # shutdown)")
 
-message(STATUS "Building MASTER")
-install(
-  CODE CODE
-  "MESSAGE(\"Flash MASTER......\")"
-  CODE "execute_process(COMMAND openocd -f
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  install(
+    CODE CODE
+    "MESSAGE(\"Flash Debug......\")"
+    CODE "execute_process(COMMAND openocd -f
 ${PROJECT_SOURCE_DIR}/Scripts/OpenOCD/openocd_gdlink.cfg -c \"init; reset
-halt; program ${PROJECT_SOURCE_DIR}/build/debug/wht_master.elf reset\" -c
+halt; program ${PROJECT_SOURCE_DIR}/build/Debug/wht_master.elf reset\" -c
 shutdown)")
+else()
+  install(
+    CODE CODE
+    "MESSAGE(\"Flash Release......\")"
+    CODE "execute_process(COMMAND openocd -f
+${PROJECT_SOURCE_DIR}/Scripts/OpenOCD/openocd_gdlink.cfg -c \"init; reset
+halt; program ${PROJECT_SOURCE_DIR}/build/Release/wht_master.elf reset\" -c
+shutdown)")
+endif()
 
 # # install by bin install( CODE CODE "MESSAGE(\"Flash......\")" CODE
 # "execute_process(COMMAND ${OPENOCD_EXECUTABLE} -f
