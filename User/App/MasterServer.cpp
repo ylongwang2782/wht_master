@@ -880,9 +880,9 @@ void MasterServer::startSlaveDataCollection() {
                "with data collection");
     }
 
-    // 计算延迟启动时间：当前时间 + 300ms
+    // 计算延迟启动时间：当前时间 + 500ms
     uint64_t currentTimeUs = hal_hptimer_get_us();
-    uint64_t startTimeUs = currentTimeUs + 1000000;    // 1000ms = 1000,000 us
+    uint64_t startTimeUs = currentTimeUs + 500000;    // 500ms = 500,000 us
 
     elog_i(TAG,
            "Calculated synchronized start time: %lu us (current: %lu us, "
@@ -990,10 +990,9 @@ void MasterServer::processTimeSync() {
     // 计算基于导电周期的同步间隔: Total Conduction Num × CONDUCTION_INTERVAL
     uint16_t totalConductionNum = calculateTotalConductionNum();
     uint32_t cycleSyncIntervalMs = totalConductionNum * CONDUCTION_INTERVAL;
-    
-    // 如果没有配置的从机或totalConductionNum为0，使用默认间隔
+
     if (cycleSyncIntervalMs == 0) {
-        cycleSyncIntervalMs = 1000; // 默认1秒
+        cycleSyncIntervalMs = 1000;
     }
 
     // 检查是否需要发送时间同步消息（基于导电周期）

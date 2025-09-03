@@ -32,7 +32,6 @@ void CX310_SlaveSpiAdapter::nss_high() {
 // 中断处理函数实现
 void CX310_SlaveSpiAdapter::int_pin_irq_handler() {
     // elog_i("UWB", "int_pin_irq_handler");
-    printf("int\r\n");
     if (!irq_enable) {
         return;
     }
@@ -80,7 +79,6 @@ bool CX310_SlaveSpiAdapter::get_recv_data(std::queue<uint8_t>& rx_data) {
         
         nss_low();
         HAL_StatusTypeDef status;
-        printf("nss_low\r\n");
         // int a = 100;
         // while (a--) {
         //     __NOP();
@@ -89,19 +87,16 @@ bool CX310_SlaveSpiAdapter::get_recv_data(std::queue<uint8_t>& rx_data) {
                                     HAL_MAX_DELAY);
         if (status != HAL_OK) {
             nss_high();
-            printf("spi_transmit_receive1 error: %d\r\n", status);
             // 退出临界区
             // taskEXIT_CRITICAL();
             return false;
         }
         recv_len = (((uint16_t)rx_buffer[2]) << 8) | rx_buffer[3];
-        printf("d: %.2X, %.2X, %.2X, %.2X\r\n", rx_buffer[0], rx_buffer[1], rx_buffer[2], rx_buffer[3]);
         // elog_i("IUWB", "recv_len: %d", recv_len);
         status = HAL_SPI_TransmitReceive(&hspi4, dummy_data, rx_buffer + 4, recv_len,
                                     HAL_MAX_DELAY);
         if (status != HAL_OK) {
             nss_high();
-            printf("spi_transmit_receive2 error: %d\r\n", status);
             // 退出临界区
             // taskEXIT_CRITICAL();
             return false;
