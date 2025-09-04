@@ -13,7 +13,7 @@
 #include "TaskCPP.h"
 
 
-#define DataTransferContext_QUEUE_SIZE 1024
+#include "master_app.h"
 
 class MasterServer {
    public:
@@ -21,7 +21,7 @@ class MasterServer {
     ~MasterServer();
 
     constexpr static const char TAG[] = "MasterServer";
-    constexpr static const uint32_t DataSend_TX_QUEUE_TIMEOUT = 100;
+    constexpr static const uint32_t DataSend_TX_QUEUE_TIMEOUT = DATA_SEND_TX_QUEUE_TIMEOUT_MS;
 
     ProtocolProcessor processor;
     std::unordered_map<uint8_t, std::unique_ptr<IMessageHandler>>
@@ -36,7 +36,6 @@ class MasterServer {
 
     // 时间同步相关
     uint32_t lastSyncTime;
-    static constexpr uint32_t SYNC_INTERVAL_MS = 1000;    // 已弃用：现在使用基于导电周期的动态间隔 (Total Conduction Num × CONDUCTION_INTERVAL)
     bool initialTimeSyncCompleted;  // 标记是否已完成初始时间同步
     
     // 时间同步响应跟踪

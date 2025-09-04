@@ -5,6 +5,7 @@
 #include <unordered_set>
 
 #include "WhtsProtocol.h"
+#include "master_app.h"
 
 using namespace WhtsProtocol;
 
@@ -17,7 +18,7 @@ struct PendingCommand {
     uint8_t maxRetries;
 
     PendingCommand(uint32_t id, std::unique_ptr<Message> cmd,
-                   uint8_t maxRetry = 3)
+                   uint8_t maxRetry = DEFAULT_MAX_RETRIES)
         : slaveId(id),
           command(std::move(cmd)),
           timestamp(0),
@@ -73,7 +74,7 @@ struct PendingBackendResponse {
 
     PendingBackendResponse(uint8_t msgType, std::unique_ptr<Message> msg,
                            const std::vector<uint32_t>& slaves,
-                           uint32_t timeout = 5000)
+                           uint32_t timeout = BACKEND_RESPONSE_TIMEOUT_MS)
         : messageType(msgType),
           originalMessage(std::move(msg)),
           timestamp(0),
@@ -97,13 +98,13 @@ struct PendingBackendResponse {
         return (currentTime - timestamp) > timeoutMs;
     }
 
-    // Get overall status (0=all success, 1=any error)
+    // Get overall status (success=all success, error=any error)
     uint8_t getOverallStatus() const {
         for (const auto& pair : slaveStatuses) {
-            if (pair.second != 0) {
-                return 1;    // Error
+            if (pair.second != RESPONSE_STATUS_SUCCESS) {
+                return RESPONSE_STATUS_ERROR;    // Error
             }
         }
-        return 0;    // Success
+        return RESPONSE_STATUS_SUCCESS;    // Success
     }
 };

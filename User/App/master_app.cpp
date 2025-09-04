@@ -1,6 +1,4 @@
 // #include "slave_app.h"
-#include "master_app.hpp"
-
 #include "MasterServer.h"
 #include "cmsis_os2.h"
 #include "udp_task.h"
@@ -19,13 +17,13 @@ extern "C" int main_app(void) {
     MasterServer masterServer;
     masterServer.run();
 
-    // uint8_t data[10] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+    // uint8_t data[TEST_DATA_SIZE] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
     for (;;) {
 
-        // UDP_SendData(data, 10, "192.168.0.107", 8080);
+        // UDP_SendData(data, TEST_DATA_SIZE, TEST_UDP_IP, TEST_UDP_PORT);
         HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_0);
         elog_v("master_app", "Hello World");
-        osDelay(500);
+        osDelay(MAIN_LOOP_DELAY_MS);
     }
     return 0;
 }

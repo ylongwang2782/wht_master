@@ -5,12 +5,12 @@
 #include "elog.h"
 
 DeviceManager::DeviceManager()
-    : currentMode(0),
-      systemRunningStatus(0),
+    : currentMode(MODE_CONDUCTION),
+      systemRunningStatus(SYSTEM_STATUS_STOP),
       configuredIntervalMs(0),    // 0表示未配置，使用默认值
       dataCollectionActive(false),
       cycleState(CollectionCycleState::IDLE),
-      nextShortId(1) {}    // 短ID从1开始分配
+      nextShortId(SHORT_ID_START) {}    // 短ID从起始值开始分配
 
 void DeviceManager::addSlave(uint32_t slaveId, uint8_t shortId) {
     connectedSlaves[slaveId] = true;
@@ -210,8 +210,8 @@ bool DeviceManager::shouldAssignShortId(uint32_t deviceId) const {
         return false;
     }
 
-    // 如果还没有分配短ID，且宣告次数在合理范围内（1-3次）
-    return !it->second.shortIdAssigned && it->second.announceCount <= 3;
+    // 如果还没有分配短ID，且宣告次数在合理范围内
+    return !it->second.shortIdAssigned && it->second.announceCount <= ANNOUNCE_COUNT_LIMIT;
 }
 
 uint8_t DeviceManager::assignShortId(uint32_t deviceId) {
@@ -226,9 +226,9 @@ uint8_t DeviceManager::assignShortId(uint32_t deviceId) {
     it->second.shortIdAssigned = true;
     it->second.lastSeenTime = getCurrentTimestampMs();
 
-    // 避免短ID溢出，从1开始循环
-    if (nextShortId > 254) {
-        nextShortId = 1;
+    // 避免短ID溢出，从起始值开始循环
+    if (nextShortId > SHORT_ID_MAX) {
+        nextShortId = SHORT_ID_START;
     }
 
     elog_i("DeviceManager", "Assigned short ID %d to device 0x%08X", assignedId,

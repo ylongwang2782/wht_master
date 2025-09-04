@@ -7,6 +7,7 @@
 #include "WhtsProtocol.h"
 #include "hptimer.hpp"
 #include "task.h"
+#include "master_app.h"
 
 using namespace WhtsProtocol;
 
@@ -84,8 +85,8 @@ inline uint32_t getCurrentTimestampUs() { return hal_hptimer_get_us(); }
 class DeviceManager {
    private:
     // 根据当前模式选择配置参数和估算采集时间
-    static constexpr uint8_t DEFAULT_INTERVAL_MS = 10;    // 默认10ms间隔
-    static constexpr uint8_t BUFFER_TIME_MS = 100;        // 缓冲时间50ms
+    static constexpr uint8_t DEFAULT_INTERVAL_MS_VAL = CONDUCTION_INTERVAL;    // 默认采集间隔
+    static constexpr uint8_t BUFFER_TIME_MS_VAL = BUFFER_TIME_MS;               // 缓冲时间
 
     std::unordered_map<uint32_t, bool> connectedSlaves;
     std::unordered_map<uint32_t, uint8_t> slaveShortIds;

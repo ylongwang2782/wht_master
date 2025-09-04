@@ -5,16 +5,12 @@
 #include <vector>
 
 #include "MutexCPP.h"
-#include "QueueCPP.h"
-#include "SemaphoreCPP.h"
 #include "elog.h"
 #include "hptimer.hpp"
-#include "master_app.hpp"
 #include "udp_task.h"
 #include "uwb_task.h"
 
-#define udpdataTransfer_STACK_SIZE 1024
-#define MAX_BUF_SIZE               100
+// Configuration values now defined in master_app.h
 
 // MasterServer 构造函数实现
 MasterServer::MasterServer()
@@ -203,14 +199,14 @@ void MasterServer::processPendingCommands() {
     Lock lock(pendingCommandsMutex);
 
     uint32_t currentTime = getCurrentTimestampMs();
-    constexpr uint32_t BASE_RETRY_TIMEOUT = 100;    // 基础重试超时时间 100ms
+    constexpr uint32_t BASE_RETRY_TIMEOUT = BASE_RETRY_TIMEOUT_MS;    // 基础重试超时时间
 
     auto it = pendingCommands.begin();
     while (it != pendingCommands.end()) {
         // 使用指数退避算法计算重试超时时间
         uint32_t retryTimeout =
             BASE_RETRY_TIMEOUT * (1 << it->retryCount);    // 2^retryCount
-        constexpr uint32_t MAX_RETRY_TIMEOUT = 1000;
+        constexpr uint32_t MAX_RETRY_TIMEOUT = MAX_RETRY_TIMEOUT_MS;
         retryTimeout = std::min(retryTimeout, MAX_RETRY_TIMEOUT);
 
         if (currentTime - it->timestamp > retryTimeout) {
@@ -347,7 +343,7 @@ void MasterServer::processPendingBackendResponses() {
     uint32_t currentTime = getCurrentTimestampMs();
 
     // Add safety check to prevent getting stuck in this method
-    const uint32_t MAX_PROCESS_TIME = 5000;    // 5 seconds max processing time
+    const uint32_t MAX_PROCESS_TIME = MAX_BACKEND_PROCESS_TIME_MS;    // 最大处理时间
     if (lastProcessTime > 0 &&
         (currentTime - lastProcessTime) > MAX_PROCESS_TIME) {
         elog_w(TAG,
@@ -363,7 +359,7 @@ void MasterServer::processPendingBackendResponses() {
     // }
 
     // Add protection against infinite loops
-    const int MAX_ITERATIONS = 10;
+    const int MAX_ITERATIONS = MAX_BACKEND_PROCESS_ITERATIONS;
     int iterationCount = 0;
 
     auto it = pendingBackendResponses.begin();
@@ -853,13 +849,13 @@ void MasterServer::startSlaveDataCollection() {
     uint8_t currentMode = dm.getCurrentMode();
     Master2Slave::SlaveRunMode runMode;
     switch (currentMode) {
-        case 0:
+        case MODE_CONDUCTION:
             runMode = Master2Slave::SlaveRunMode::CONDUCTION_TEST;
             break;
-        case 1:
+        case MODE_RESISTANCE:
             runMode = Master2Slave::SlaveRunMode::RESISTANCE_TEST;
             break;
-        case 2:
+        case MODE_CLIP:
             runMode = Master2Slave::SlaveRunMode::CLIP_TEST;
             break;
         default:
@@ -880,9 +876,9 @@ void MasterServer::startSlaveDataCollection() {
                "with data collection");
     }
 
-    // 计算延迟启动时间：当前时间 + 500ms
+    // 计算延迟启动时间：当前时间 + 同步启动延迟
     uint64_t currentTimeUs = hal_hptimer_get_us();
-    uint64_t startTimeUs = currentTimeUs + 500000;    // 500ms = 500,000 us
+    uint64_t startTimeUs = currentTimeUs + SYNC_START_DELAY_US;    // 同步启动延迟
 
     elog_i(TAG,
            "Calculated synchronized start time: %lu us (current: %lu us, "
@@ -901,7 +897,7 @@ void MasterServer::startSlaveDataCollection() {
             auto controlCmd =
                 std::make_unique<Master2Slave::SlaveControlMessage>();
             controlCmd->mode = runMode;
-            controlCmd->enable = 1;                 // 启动
+            controlCmd->enable = CONTROL_ENABLE;    // 启动
             controlCmd->startTime = startTimeUs;    // 设置同步启动时间
 
             elog_i(TAG,
@@ -913,7 +909,7 @@ void MasterServer::startSlaveDataCollection() {
             // 添加控制请求跟踪
             addControlRequest(slaveId, startTimeUs);
 
-            sendCommandToSlaveWithRetry(slaveId, std::move(controlCmd), 3);
+            sendCommandToSlaveWithRetry(slaveId, std::move(controlCmd), DEFAULT_MAX_RETRIES);
             elog_i(TAG, "Sent start control command to slave 0x%08X", slaveId);
             commandsSent++;
             targetSlaves.push_back(slaveId);
@@ -931,7 +927,7 @@ void MasterServer::startSlaveDataCollection() {
                static_cast<int>(targetSlaves.size()));
 
         bool allSuccess =
-            waitForAllControlResponses(targetSlaves, 2000);    // 等待2秒
+            waitForAllControlResponses(targetSlaves, CONTROL_RESPONSE_TIMEOUT_MS);    // 等待控制响应
 
         if (allSuccess) {
             elog_i(TAG, "All slaves confirmed control commands successfully");
@@ -963,9 +959,9 @@ void MasterServer::stopSlaveDataCollection() {
                 std::make_unique<Master2Slave::SlaveControlMessage>();
             controlCmd->mode =
                 Master2Slave::SlaveRunMode::CONDUCTION_TEST;    // 模式不重要
-            controlCmd->enable = 0;                             // 停止
+            controlCmd->enable = CONTROL_DISABLE;               // 停止
 
-            sendCommandToSlaveWithRetry(slaveId, std::move(controlCmd), 3);
+            sendCommandToSlaveWithRetry(slaveId, std::move(controlCmd), DEFAULT_MAX_RETRIES);
             elog_i(TAG, "Sent stop control command to slave 0x%08X", slaveId);
             commandsSent++;
         } else {
@@ -981,29 +977,29 @@ void MasterServer::processTimeSync() {
     DeviceManager &dm = getDeviceManager();
 
     // 只有在系统运行时且已完成初始时间同步后才发送定时同步消息
-    if (dm.getSystemRunningStatus() != 1 || !initialTimeSyncCompleted) {
+    if (dm.getSystemRunningStatus() != SYSTEM_STATUS_RUN || !initialTimeSyncCompleted) {
         return;
     }
 
     uint32_t currentTime = getCurrentTimestampMs();
 
     // 计算TDMA周期长度: 延迟启动时间 + 总时隙数量 × interval + 额外延迟
-    uint32_t startupDelayMs = 100;  // 启动延迟时间（与startTime设置保持一致）
-    uint32_t extraDelayMs = 500;     // 额外的安全延迟时间
+    uint32_t startupDelayMs = TDMA_STARTUP_DELAY_MS;  // 启动延迟时间（与startTime设置保持一致）
+    uint32_t extraDelayMs = TDMA_EXTRA_DELAY_MS;      // 额外的安全延迟时间
     
-    // 获取已连接的从机数量（即时隙数量）
-    auto connectedSlaves = dm.getConnectedSlavesInConfigOrder();
-    uint32_t totalTimeSlots = static_cast<uint32_t>(connectedSlaves.size());
+    // totalTimeSlots = totalConductionNum * CONDUCTION_INTERVAL
+    uint32_t totalConductionNum = calculateTotalConductionNum();
     
     // 获取有效的采集间隔
     uint32_t intervalMs = static_cast<uint32_t>(dm.getEffectiveInterval());
+    uint32_t totalTimeSlots = totalConductionNum * intervalMs;
     
     // 计算完整的TDMA周期时间D
     uint32_t tdmaCycleMs = startupDelayMs + (totalTimeSlots * intervalMs) + extraDelayMs;
     
     // 最小周期保护，避免过于频繁的同步
-    if (tdmaCycleMs < 500) {
-        tdmaCycleMs = 500;  // 最小500ms周期
+    if (tdmaCycleMs < TDMA_MIN_CYCLE_MS) {
+        tdmaCycleMs = TDMA_MIN_CYCLE_MS;  // 最小周期时间
     }
 
     // 检查是否需要发送TDMA同步消息
@@ -1025,8 +1021,8 @@ void MasterServer::processTimeSync() {
         // 构建从机配置列表
         buildSlaveConfigsForSync(*syncCmd, dm);
 
-        // 广播发送统一同步消息（使用0xFFFFFFFF作为广播地址）
-        sendCommandToSlave(0xFFFFFFFF, std::move(syncCmd));
+        // 广播发送统一同步消息（使用广播地址）
+        sendCommandToSlave(BROADCAST_SLAVE_ID, std::move(syncCmd));
 
         lastSyncTime = currentTime;
 
@@ -1062,13 +1058,13 @@ void MasterServer::buildSlaveConfigsForSync(Master2Slave::SyncMessage& syncMsg,
         
         // 根据当前模式设置测试数量
         switch (dm.getCurrentMode()) {
-            case 0:  // 导通检测
+            case MODE_CONDUCTION:  // 导通检测
                 config.testCount = slaveConfig.conductionNum;
                 break;
-            case 1:  // 阻值检测
+            case MODE_RESISTANCE:  // 阻值检测
                 config.testCount = slaveConfig.resistanceNum;
                 break;
-            case 2:  // 卡钉检测
+            case MODE_CLIP:  // 卡钉检测
                 config.testCount = slaveConfig.clipMode;  // 使用clipMode作为卡钉数量
                 break;
             default:
@@ -1120,7 +1116,7 @@ bool MasterServer::ensureAllSlavesTimeSynced() {
         }
 
         // 添加小延迟避免消息冲突
-        vTaskDelay(pdMS_TO_TICKS(50));
+        vTaskDelay(pdMS_TO_TICKS(TIME_SYNC_DELAY_MS));
     }
 
     // 清理完成的时间同步请求
@@ -1149,10 +1145,10 @@ bool MasterServer::sendSetTimeToSlave(uint32_t slaveId) {
     addTimeSyncRequest(slaveId, timestampUs);
 
     // 发送命令
-    sendCommandToSlaveWithRetry(slaveId, std::move(setTimeCmd), 3);
+    sendCommandToSlaveWithRetry(slaveId, std::move(setTimeCmd), DEFAULT_MAX_RETRIES);
 
     // 等待响应
-    bool success = waitForTimeSyncResponse(slaveId, 1000);    // 等待1秒
+    bool success = waitForTimeSyncResponse(slaveId, TIME_SYNC_TIMEOUT_MS);    // 等待时间同步响应
 
     if (success) {
         // elog_i(TAG, "Time sync successful for slave 0x%08X", slaveId);
@@ -1292,7 +1288,7 @@ void MasterServer::clearControlRequests() {
 
 bool MasterServer::sendToBackend(std::vector<uint8_t> &frame) {
     // 数据通过UDP_SendData发送
-    if (UDP_SendData(frame.data(), frame.size(), "192.168.0.3", 8080) == 0) {
+    if (UDP_SendData(frame.data(), frame.size(), DEFAULT_BACKEND_IP, DEFAULT_BACKEND_PORT) == 0) {
         elog_i(TAG, "sendToBackend success");
         return true;
     } else {
@@ -1304,8 +1300,8 @@ bool MasterServer::sendToBackend(std::vector<uint8_t> &frame) {
 bool MasterServer::sendToSlave(std::vector<uint8_t> &frame) {
     static uint32_t consecutiveFailures = 0;
     static uint32_t lastFailureTime = 0;
-    const uint32_t MAX_CONSECUTIVE_FAILURES = 10;     // 最大连续失败次数
-    const uint32_t FAILURE_RESET_INTERVAL = 30000;    // 30秒后重置失败计数
+    const uint32_t MAX_CONSECUTIVE_FAILURES = MAX_CONSECUTIVE_UWB_FAILURES;     // 最大连续失败次数
+    const uint32_t FAILURE_RESET_INTERVAL = UWB_FAILURE_RESET_INTERVAL_MS;    // 失败重置间隔
 
     uint32_t currentTime = getCurrentTimestampMs();
 
@@ -1339,7 +1335,7 @@ bool MasterServer::sendToSlave(std::vector<uint8_t> &frame) {
 bool MasterServer::checkAndRecoverUWBHealth() {
     static uint32_t lastHealthCheck = 0;
     static uint32_t uwbResetCount = 0;
-    const uint32_t HEALTH_CHECK_INTERVAL = 60000;    // 60秒检查一次
+    const uint32_t HEALTH_CHECK_INTERVAL = UWB_HEALTH_CHECK_INTERVAL_MS;    // UWB健康检查间隔
 
     uint32_t currentTime = getCurrentTimestampMs();
 
@@ -1470,10 +1466,10 @@ void MasterServer::MainTask::task() {
 
     uint32_t lastDeviceStatusCheck = 0;
     uint32_t deviceStatusCheckInterval =
-        30000;    // Check device status every 30 seconds
+        DEVICE_STATUS_CHECK_INTERVAL_MS;    // 设备状态检查间隔
     uint32_t lastDeviceCleanup = 0;
     uint32_t deviceCleanupInterval =
-        60000;    // Clean up expired devices every 60 seconds
+        DEVICE_CLEANUP_INTERVAL_MS;    // 设备清理间隔
 
     for (;;) {
         uint32_t currentTime = getCurrentTimestampMs();
@@ -1499,14 +1495,14 @@ void MasterServer::MainTask::task() {
         
         // 定期清理超时设备（删除而不是标记离线）
         if (currentTime - lastDeviceCleanup >= deviceCleanupInterval) {
-            parent.getDeviceManager().cleanupExpiredDevices(90000);  // 90秒超时删除
+            parent.getDeviceManager().cleanupExpiredDevices(DEVICE_TIMEOUT_MS);  // 设备超时删除
             lastDeviceCleanup = currentTime;
         }
 
         // 定期检查UWB模块健康状态
         parent.checkAndRecoverUWBHealth();
 
-        TaskBase::delay(1);
+        TaskBase::delay(TASK_DELAY_MS);
     }
 }
 
@@ -1535,7 +1531,7 @@ void MasterServer::run() {
     // 主循环
     while (1) {
         // elog_i(TAG, "hptimer ms: %d", getCurrentTimestampMs());
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(MAIN_LOOP_DELAY_MS));
         HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_0);
     }
 }

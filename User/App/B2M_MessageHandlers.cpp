@@ -4,7 +4,7 @@
 
 #include "elog.h"
 #include "MasterServer.h"
-#include "master_app.hpp"
+#include "master_app.h"
 
 // Slave Configuration Message Handler
 std::unique_ptr<Message> SlaveConfigHandler::processMessage(
@@ -17,7 +17,7 @@ std::unique_ptr<Message> SlaveConfigHandler::processMessage(
 
     auto response =
         std::make_unique<Master2Backend::SlaveConfigResponseMessage>();
-    response->status = 0;    // Success
+    response->status = RESPONSE_STATUS_SUCCESS;    // Success
     response->slaveNum = configMsg->slaveNum;
 
     // Copy slaves info
@@ -91,7 +91,7 @@ void ModeConfigHandler::executeActions(const Message &message,
     
     // Send immediate success response since configuration is handled by sync messages
     auto response = std::make_unique<Master2Backend::ModeConfigResponseMessage>();
-    response->status = 0;    // Success
+    response->status = RESPONSE_STATUS_SUCCESS;    // Success
     response->mode = modeMsg->mode;
     server->sendResponseToBackend(std::move(response));
     
@@ -142,7 +142,7 @@ void ResetHandler::executeActions(const Message &message,
                "response");
         // If no connected slaves, send immediate success response
         auto response = std::make_unique<Master2Backend::RstResponseMessage>();
-        response->status = 0;    // Success
+        response->status = RESPONSE_STATUS_SUCCESS;    // Success
         response->slaveNum = rstMsg->slaveNum;
 
         // Copy slave reset info
@@ -177,7 +177,7 @@ void ResetHandler::executeActions(const Message &message,
             resetCmd->clipLed = slave.clipStatus;
 
             server->sendCommandToSlaveWithRetry(slave.id, std::move(resetCmd),
-                                                3);
+                                                DEFAULT_MAX_RETRIES);
             successCount++;
             elog_v(
                 "ResetHandler",
@@ -202,7 +202,7 @@ std::unique_ptr<Message> ControlHandler::processMessage(const Message &message,
            static_cast<int>(controlMsg->runningStatus));
 
     auto response = std::make_unique<Master2Backend::CtrlResponseMessage>();
-    response->status = 0;    // Success
+    response->status = RESPONSE_STATUS_SUCCESS;    // Success
     response->runningStatus = controlMsg->runningStatus;
 
     return std::move(response);
@@ -224,7 +224,7 @@ void ControlHandler::executeActions(const Message &message,
 
     // 根据运行状态执行操作
     switch (controlMsg->runningStatus) {
-        case 0:    // 停止
+        case SYSTEM_STATUS_STOP:    // 停止
             elog_v("ControlHandler", "Stopping all operations");
 
             // 清除所有待处理的命令，避免无意义的重试
@@ -240,13 +240,13 @@ void ControlHandler::executeActions(const Message &message,
                    "Data collection stopped, stop commands sent to slaves");
             break;
 
-        case 1:    // 启动
+        case SYSTEM_STATUS_RUN:    // 启动
             elog_v("ControlHandler", "Starting operations in mode %d",
                    static_cast<int>(deviceManager.getCurrentMode()));
 
             // 根据当前模式启动相应操作
             if (deviceManager.getCurrentMode() <=
-                2) {    // 0=Conduction, 1=Resistance, 2=Clip
+                MODE_CLIP) {    // 导通、阻值、卡钉检测模式
                 // 启动数据采集模式
                 deviceManager.startDataCollection();
 
@@ -263,7 +263,7 @@ void ControlHandler::executeActions(const Message &message,
             }
             break;
 
-        case 2:    // 重置
+        case SYSTEM_STATUS_RESET:    // 重置
             elog_v("ControlHandler", "Resetting all devices");
 
             // 重置所有从机状态
@@ -271,11 +271,11 @@ void ControlHandler::executeActions(const Message &message,
                 if (deviceManager.hasSlaveConfig(slaveId)) {
                     auto resetCmd =
                         std::make_unique<Master2Slave::RstMessage>();
-                    resetCmd->lockStatus = 0;    // 解锁
-                    resetCmd->clipLed = 0;       // 关闭LED
+                    resetCmd->lockStatus = RESET_UNLOCK;    // 解锁
+                    resetCmd->clipLed = LED_OFF;             // 关闭LED
 
                     server->sendCommandToSlaveWithRetry(slaveId,
-                                                        std::move(resetCmd), 1);
+                                                        std::move(resetCmd), RESET_MAX_RETRIES);
                 }
             }
 
@@ -386,7 +386,7 @@ std::unique_ptr<Message> IntervalConfigHandler::processMessage(
 
     auto response =
         std::make_unique<Master2Backend::IntervalConfigResponseMessage>();
-    response->status = 0;    // Success
+    response->status = RESPONSE_STATUS_SUCCESS;    // Success
     response->intervalMs = intervalMsg->intervalMs;
 
     return std::move(response);
