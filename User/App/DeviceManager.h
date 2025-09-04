@@ -124,6 +124,7 @@ class DeviceManager
     DeviceInfo getDeviceInfo(uint32_t deviceId) const;
     void updateDeviceOnlineStatus(uint32_t timeoutMs = 30000); // 检查设备在线状态
     void cleanupExpiredDevices(uint32_t timeoutMs = 60000);    // 清理超时设备（删除而不是标记离线）
+    void clearAllDevices();                                    // 清除所有设备信息和相关状态
 
     // Configuration management
     void setSlaveConfig(uint32_t slaveId, const Backend2Master::SlaveConfigMessage::SlaveInfo &config);

@@ -156,3 +156,21 @@ class IntervalConfigHandler : public IMessageHandler
     IntervalConfigHandler(const IntervalConfigHandler &) = delete;
     IntervalConfigHandler &operator=(const IntervalConfigHandler &) = delete;
 };
+
+// Clear Device List Message Handler
+class ClearDeviceListHandler : public IMessageHandler
+{
+  public:
+    static ClearDeviceListHandler &getInstance()
+    {
+        static ClearDeviceListHandler instance;
+        return instance;
+    }
+    std::unique_ptr<Message> processMessage(const Message &message, MasterServer *server) override;
+    void executeActions(const Message &message, MasterServer *server) override;
+
+  private:
+    ClearDeviceListHandler() = default;
+    ClearDeviceListHandler(const ClearDeviceListHandler &) = delete;
+    ClearDeviceListHandler &operator=(const ClearDeviceListHandler &) = delete;
+};

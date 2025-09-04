@@ -383,3 +383,27 @@ void DeviceManager::clearAllResetFlags()
     slaveResetFlags.clear();
     elog_v("DeviceManager", "Cleared all slave reset flags");
 }
+
+void DeviceManager::clearAllDevices()
+{
+    // 清除所有设备信息
+    size_t deviceCount = deviceInfos.size();
+    deviceInfos.clear();
+
+    // 清除连接的从机列表
+    connectedSlaves.clear();
+
+    // 清除从机短ID映射
+    slaveShortIds.clear();
+
+    // 重置短ID计数器
+    nextShortId = SHORT_ID_START;
+
+    // 清除从机配置和顺序
+    clearSlaveConfigs();
+
+    // 清除复位标志
+    clearAllResetFlags();
+
+    elog_i("DeviceManager", "Cleared all device information (%d devices removed)", static_cast<int>(deviceCount));
+}

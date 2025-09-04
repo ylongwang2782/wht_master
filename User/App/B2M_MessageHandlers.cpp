@@ -367,3 +367,28 @@ void IntervalConfigHandler::executeActions(const Message &message, MasterServer 
 
     elog_v("IntervalConfigHandler", "Configured interval set to %d", intervalMsg->intervalMs);
 }
+
+// Clear Device List Handler
+std::unique_ptr<Message> ClearDeviceListHandler::processMessage(const Message &message, MasterServer *server)
+{
+    const auto *clearMsg = dynamic_cast<const Backend2Master::ClearDeviceListMessage *>(&message);
+    if (!clearMsg)
+        return nullptr;
+
+    elog_i("ClearDeviceListHandler", "Processing clear device list request");
+
+    // 此消息不需要回复，后端可通过设备列表查询来确认是否已清空
+    return nullptr;
+}
+
+void ClearDeviceListHandler::executeActions(const Message &message, MasterServer *server)
+{
+    const auto *clearMsg = dynamic_cast<const Backend2Master::ClearDeviceListMessage *>(&message);
+    if (!clearMsg)
+        return;
+
+    // 清除所有设备信息
+    server->getDeviceManager().clearAllDevices();
+
+    elog_i("ClearDeviceListHandler", "All device information cleared successfully");
+}

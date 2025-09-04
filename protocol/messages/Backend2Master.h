@@ -126,6 +126,21 @@ class DeviceListReqMessage : public Message {
     }
 };
 
+class ClearDeviceListMessage : public Message {
+   public:
+    uint8_t reserve;
+
+    std::vector<uint8_t> serialize() const override;
+    bool deserialize(const std::vector<uint8_t> &data) override;
+    uint8_t getMessageId() const override {
+        return static_cast<uint8_t>(
+            Backend2MasterMessageId::CLEAR_DEVICE_LIST_MSG);
+    }
+    const char* getMessageTypeName() const override {
+        return "Clear Device List";
+    }
+};
+
 }    // namespace Backend2Master
 }    // namespace WhtsProtocol
 

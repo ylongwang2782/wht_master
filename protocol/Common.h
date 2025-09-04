@@ -42,7 +42,8 @@ enum class Backend2MasterMessageId : uint8_t {
     CTRL_MSG = 0x03,
     INTERVAL_CFG_MSG = 0x06,
     PING_CTRL_MSG = 0x10,
-    DEVICE_LIST_REQ_MSG = 0x11
+    DEVICE_LIST_REQ_MSG = 0x11,
+    CLEAR_DEVICE_LIST_MSG = 0x12
 };
 
 // Master2Backend Message ID 枚举

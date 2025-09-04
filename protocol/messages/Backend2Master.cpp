@@ -160,5 +160,17 @@ bool DeviceListReqMessage::deserialize(const std::vector<uint8_t> &data) {
     return true;
 }
 
+// ClearDeviceListMessage 实现
+std::vector<uint8_t> ClearDeviceListMessage::serialize() const {
+    return {reserve};
+}
+
+bool ClearDeviceListMessage::deserialize(const std::vector<uint8_t> &data) {
+    if (data.size() < 1)
+        return false;
+    reserve = data[0];
+    return true;
+}
+
 } // namespace Backend2Master
 } // namespace WhtsProtocol

@@ -223,6 +223,9 @@ std::unique_ptr<Message> ProtocolProcessor::createMessage(PacketId packetId,
                 case Backend2MasterMessageId::INTERVAL_CFG_MSG:
                     return std::make_unique<
                         Backend2Master::IntervalConfigMessage>();
+                case Backend2MasterMessageId::CLEAR_DEVICE_LIST_MSG:
+                    return std::make_unique<
+                        Backend2Master::ClearDeviceListMessage>();
             }
             break;
 

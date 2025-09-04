@@ -41,6 +41,8 @@ void MasterServer::initializeMessageHandlers()
         &DeviceListHandler::getInstance();
     messageHandlers_[static_cast<uint8_t>(Backend2MasterMessageId::INTERVAL_CFG_MSG)] =
         &IntervalConfigHandler::getInstance();
+    messageHandlers_[static_cast<uint8_t>(Backend2MasterMessageId::CLEAR_DEVICE_LIST_MSG)] =
+        &ClearDeviceListHandler::getInstance();
 }
 
 void MasterServer::initializeSlave2MasterHandlers()
