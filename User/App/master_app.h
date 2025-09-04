@@ -5,19 +5,13 @@
 // ============================
 
 // ========== TIMING CONFIGURATIONS ==========
-#define CONDUCTION_INTERVAL 10 // 导通检测间隔时间 (ms)
 #define DEFAULT_INTERVAL_MS 10 // 默认采集间隔 (ms)
-#define BUFFER_TIME_MS 100     // 缓冲时间 (ms)
-
-// Time synchronization
-#define TIME_SYNC_TIMEOUT_MS 1000 // 时间同步超时时间 (ms)
-#define TIME_SYNC_DELAY_MS 50     // 时间同步间隔延迟 (ms)
 
 // TDMA timing
-#define TDMA_STARTUP_DELAY_MS 100  // TDMA启动延迟时间 (ms)
-#define TDMA_EXTRA_DELAY_MS 500    // TDMA额外延迟时间 (ms)
-#define TDMA_MIN_CYCLE_MS 500      // TDMA最小周期时间 (ms)
-#define SYNC_START_DELAY_US 500000 // 同步启动延迟时间 (us) - 500ms
+#define TDMA_STARTUP_DELAY_MS 100                        // TDMA启动延迟时间 (ms)
+#define TDMA_EXTRA_DELAY_MS 100                          // TDMA额外延迟时间 (ms)
+#define TDMA_MIN_CYCLE_MS TDMA_EXTRA_DELAY_MS            // TDMA最小周期时间 (ms)
+#define SYNC_START_DELAY_US (TDMA_EXTRA_DELAY_MS * 1000) // 同步启动延迟时间 (us) - 500ms
 
 // ========== RETRY AND TIMEOUT CONFIGURATIONS ==========
 #define DEFAULT_MAX_RETRIES 3            // 默认最大重试次数
@@ -55,15 +49,6 @@
 // ========== NETWORK CONFIGURATIONS ==========
 #define DEFAULT_BACKEND_IP "192.168.0.3" // 默认后端IP地址
 #define DEFAULT_BACKEND_PORT 8080        // 默认后端端口
-#define TEST_UDP_IP "192.168.0.107"      // 测试UDP IP地址
-#define TEST_UDP_PORT 8080               // 测试UDP端口
-
-// ========== TEST DATA CONFIGURATIONS ==========
-#define TEST_DATA_SIZE 10 // 测试数据大小
-
-// ========== GPIO CONFIGURATIONS ==========
-// GPIO_PIN_0 will be defined by HAL headers
-#define MASTER_GPIO_TOGGLE_PIN 0 // GPIO切换引脚 (GPIO_PIN_0)
 
 // ========== PROTOCOL CONFIGURATIONS ==========
 #define BROADCAST_SLAVE_ID 0xFFFFFFFF // 广播从机ID

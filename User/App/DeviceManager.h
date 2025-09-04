@@ -80,10 +80,6 @@ inline uint32_t getCurrentTimestampUs()
 class DeviceManager
 {
   private:
-    // 根据当前模式选择配置参数和估算采集时间
-    static constexpr uint8_t DEFAULT_INTERVAL_MS_VAL = CONDUCTION_INTERVAL; // 默认采集间隔
-    static constexpr uint8_t BUFFER_TIME_MS_VAL = BUFFER_TIME_MS;           // 缓冲时间
-
     std::unordered_map<uint32_t, bool> connectedSlaves;
     std::unordered_map<uint32_t, uint8_t> slaveShortIds;
     std::unordered_map<uint32_t, Backend2Master::SlaveConfigMessage::SlaveInfo> slaveConfigs;

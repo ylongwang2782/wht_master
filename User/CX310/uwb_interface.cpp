@@ -1,7 +1,5 @@
 #include "uwb_interface.hpp"
 
-#include "elog.h"
-
 // 全局指针定义
 CX310_SlaveSpiAdapter *g_uwb_adapter = nullptr;
 
@@ -39,7 +37,6 @@ void CX310_SlaveSpiAdapter::nss_high()
 // 中断处理函数实现
 void CX310_SlaveSpiAdapter::int_pin_irq_handler()
 {
-    // elog_i("UWB", "int_pin_irq_handler");
     if (!irq_enable)
     {
         return;
@@ -68,7 +65,6 @@ void CX310_SlaveSpiAdapter::turn_of_reset_signal()
 
 bool CX310_SlaveSpiAdapter::send(std::vector<uint8_t> &tx_data)
 {
-    // 进入临界区，防止SPI通信被其他任务或中断打断
     taskENTER_CRITICAL();
 
     nss_low();
@@ -90,39 +86,27 @@ bool CX310_SlaveSpiAdapter::get_recv_data(std::queue<uint8_t> &rx_data)
 {
     if (rx_semaphore.take(0))
     {
-        // 进入临界区，防止SPI通信被其他任务或中断打断
-        // taskENTER_CRITICAL();
 
         nss_low();
         HAL_StatusTypeDef status;
-        // int a = 100;
-        // while (a--) {
-        //     __NOP();
-        // }
+
         status = HAL_SPI_TransmitReceive(&hspi4, dummy_data, rx_buffer, 4, HAL_MAX_DELAY);
         if (status != HAL_OK)
         {
             nss_high();
-            // 退出临界区
-            // taskEXIT_CRITICAL();
             return false;
         }
+
         recv_len = (((uint16_t)rx_buffer[2]) << 8) | rx_buffer[3];
-        // elog_i("IUWB", "recv_len: %d", recv_len);
+
         status = HAL_SPI_TransmitReceive(&hspi4, dummy_data, rx_buffer + 4, recv_len, HAL_MAX_DELAY);
         if (status != HAL_OK)
         {
             nss_high();
-            // 退出临界区
-            // taskEXIT_CRITICAL();
             return false;
         }
         nss_high();
 
-        // 退出临界区
-        // taskEXIT_CRITICAL();
-
-        // elog_w("UWB", "recv_len: %d", recv_len);
         for (int i = 0; i < recv_len + 4; i++)
         {
             rx_data.push(rx_buffer[i]);
@@ -166,5 +150,4 @@ void CX310_SlaveSpiAdapter::delay_ms(uint32_t ms)
 
 void CX310_SlaveSpiAdapter::log(const char *format, ...)
 {
-    // 空实现
 }

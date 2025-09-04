@@ -868,10 +868,9 @@ void MasterServer::processTimeSync()
 
     // 获取有效的采集间隔
     uint32_t intervalMs = static_cast<uint32_t>(dm.getEffectiveInterval());
-    uint32_t totalTimeSlots = totalConductionNum * intervalMs;
 
     // 计算完整的TDMA周期时间D
-    uint32_t tdmaCycleMs = startupDelayMs + (totalTimeSlots * intervalMs) + extraDelayMs;
+    uint32_t tdmaCycleMs = startupDelayMs + (totalConductionNum * intervalMs) + extraDelayMs;
 
     // 最小周期保护，避免过于频繁的同步
     if (tdmaCycleMs < TDMA_MIN_CYCLE_MS)
