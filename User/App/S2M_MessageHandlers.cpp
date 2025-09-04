@@ -1,150 +1,141 @@
 #include "S2M_MessageHandlers.h"
 
-#include "elog.h"
 #include "MasterServer.h"
+#include "elog.h"
 
 // Announce Message Handler
-std::unique_ptr<Message> AnnounceHandler::processMessage(uint32_t slaveId,
-                                                         const Message &message,
-                                                         MasterServer *server) {
+std::unique_ptr<Message> AnnounceHandler::processMessage(uint32_t slaveId, const Message &message, MasterServer *server)
+{
     // Announce messages don't generate responses
     return nullptr;
 }
 
-void AnnounceHandler::executeActions(uint32_t slaveId, const Message &message,
-                                     MasterServer *server) {
-    const auto *announceMsg =
-        dynamic_cast<const Slave2Master::AnnounceMessage *>(&message);
-    if (!announceMsg) return;
+void AnnounceHandler::executeActions(uint32_t slaveId, const Message &message, MasterServer *server)
+{
+    const auto *announceMsg = dynamic_cast<const Slave2Master::AnnounceMessage *>(&message);
+    if (!announceMsg)
+        return;
 
-    elog_i("AnnounceHandler",
-           "Received announce message from device 0x%08X (v%d.%d.%d)",
-           announceMsg->deviceId, announceMsg->versionMajor,
-           announceMsg->versionMinor, announceMsg->versionPatch);
+    elog_i("AnnounceHandler", "Received announce message from device 0x%08X (v%d.%d.%d)", announceMsg->deviceId,
+           announceMsg->versionMajor, announceMsg->versionMinor, announceMsg->versionPatch);
 
     // 添加或更新设备信息
-    if (!server->getDeviceManager().hasDeviceInfo(announceMsg->deviceId)) {
-        server->getDeviceManager().addDeviceInfo(
-            announceMsg->deviceId, announceMsg->versionMajor,
-            announceMsg->versionMinor, announceMsg->versionPatch);
-    } else {
+    if (!server->getDeviceManager().hasDeviceInfo(announceMsg->deviceId))
+    {
+        server->getDeviceManager().addDeviceInfo(announceMsg->deviceId, announceMsg->versionMajor,
+                                                 announceMsg->versionMinor, announceMsg->versionPatch);
+    }
+    else
+    {
         server->getDeviceManager().updateDeviceAnnounce(announceMsg->deviceId);
     }
 
     // 检查是否需要分配短ID
-    if (server->getDeviceManager().shouldAssignShortId(announceMsg->deviceId)) {
-        uint8_t shortId =
-            server->getDeviceManager().assignShortId(announceMsg->deviceId);
-        if (shortId > 0) {
+    if (server->getDeviceManager().shouldAssignShortId(announceMsg->deviceId))
+    {
+        uint8_t shortId = server->getDeviceManager().assignShortId(announceMsg->deviceId);
+        if (shortId > 0)
+        {
             // 发送短ID分配消息
-            auto assignMsg =
-                std::make_unique<Master2Slave::ShortIdAssignMessage>();
+            auto assignMsg = std::make_unique<Master2Slave::ShortIdAssignMessage>();
             assignMsg->shortId = shortId;
 
-            server->sendCommandToSlaveWithRetry(announceMsg->deviceId,
-                                                std::move(assignMsg), 3);
-            elog_i("AnnounceHandler",
-                   "Sent short ID assignment (%d) to device 0x%08X", shortId,
-                   announceMsg->deviceId);
+            server->sendCommandToSlaveWithRetry(announceMsg->deviceId, std::move(assignMsg), 3);
+            elog_i("AnnounceHandler", "Sent short ID assignment (%d) to device 0x%08X", shortId, announceMsg->deviceId);
         }
     }
 }
 
 // Short ID Confirm Message Handler
-std::unique_ptr<Message> ShortIdConfirmHandler::processMessage(
-    uint32_t slaveId, const Message &message, MasterServer *server) {
+std::unique_ptr<Message> ShortIdConfirmHandler::processMessage(uint32_t slaveId, const Message &message,
+                                                               MasterServer *server)
+{
     // Short ID confirm messages don't generate responses
     return nullptr;
 }
 
-void ShortIdConfirmHandler::executeActions(uint32_t slaveId,
-                                           const Message &message,
-                                           MasterServer *server) {
-    const auto *confirmMsg =
-        dynamic_cast<const Slave2Master::ShortIdConfirmMessage *>(&message);
-    if (!confirmMsg) return;
+void ShortIdConfirmHandler::executeActions(uint32_t slaveId, const Message &message, MasterServer *server)
+{
+    const auto *confirmMsg = dynamic_cast<const Slave2Master::ShortIdConfirmMessage *>(&message);
+    if (!confirmMsg)
+        return;
 
     elog_i("ShortIdConfirmHandler",
            "Received short ID confirmation from device 0x%08X (shortId=%d, "
            "status=%d)",
            slaveId, confirmMsg->shortId, confirmMsg->status);
 
-    if (confirmMsg->status == 0) {
+    if (confirmMsg->status == 0)
+    {
         // 成功确认，将设备加入到两个管理系统
         server->getDeviceManager().confirmShortId(slaveId, confirmMsg->shortId);
-        elog_i("ShortIdConfirmHandler",
-               "Device 0x%08X successfully joined network with short ID %d",
-               slaveId, confirmMsg->shortId);
-    } else {
-        elog_w("ShortIdConfirmHandler",
-               "Device 0x%08X failed to confirm short ID %d (status=%d)",
-               slaveId, confirmMsg->shortId, confirmMsg->status);
-    } 
+        elog_i("ShortIdConfirmHandler", "Device 0x%08X successfully joined network with short ID %d", slaveId,
+               confirmMsg->shortId);
+    }
+    else
+    {
+        elog_w("ShortIdConfirmHandler", "Device 0x%08X failed to confirm short ID %d (status=%d)", slaveId,
+               confirmMsg->shortId, confirmMsg->status);
+    }
 
     // 移除相应的待处理命令，防止重试
-    server->removePendingCommand(
-        slaveId,
-        static_cast<uint8_t>(Master2SlaveMessageId::SHORT_ID_ASSIGN_MSG));
+    server->removePendingCommand(slaveId, static_cast<uint8_t>(Master2SlaveMessageId::SHORT_ID_ASSIGN_MSG));
 }
 
 // Reset Response Handler
-std::unique_ptr<Message> ResetResponseHandler::processMessage(
-    uint32_t slaveId, const Message &message, MasterServer *server) {
+std::unique_ptr<Message> ResetResponseHandler::processMessage(uint32_t slaveId, const Message &message,
+                                                              MasterServer *server)
+{
     // Reset response messages don't generate responses
     return nullptr;
 }
 
-void ResetResponseHandler::executeActions(uint32_t slaveId,
-                                          const Message &message,
-                                          MasterServer *server) {
-    const auto *rspMsg =
-        dynamic_cast<const Slave2Master::RstResponseMessage *>(&message);
-    if (!rspMsg) return;
+void ResetResponseHandler::executeActions(uint32_t slaveId, const Message &message, MasterServer *server)
+{
+    const auto *rspMsg = dynamic_cast<const Slave2Master::RstResponseMessage *>(&message);
+    if (!rspMsg)
+        return;
 
-    elog_v("ResetResponseHandler",
-           "Received reset response from slave 0x%08X, status: %d", slaveId,
-           rspMsg->status);
+    elog_v("ResetResponseHandler", "Received reset response from slave 0x%08X, status: %d", slaveId, rspMsg->status);
 
     server->getDeviceManager().updateDeviceLastSeen(slaveId);
 
     // Handle slave config response for backend tracking
-    server->handleSlaveConfigResponse(slaveId, message.getMessageId(),
-                                      rspMsg->status);
+    server->handleSlaveConfigResponse(slaveId, message.getMessageId(), rspMsg->status);
 
     // 移除相应的待处理命令
-    server->removePendingCommand(
-        slaveId, static_cast<uint8_t>(Master2SlaveMessageId::RST_MSG));
+    server->removePendingCommand(slaveId, static_cast<uint8_t>(Master2SlaveMessageId::RST_MSG));
 }
 
 // Ping Response Handler
-std::unique_ptr<Message> PingResponseHandler::processMessage(
-    uint32_t slaveId, const Message &message, MasterServer *server) {
+std::unique_ptr<Message> PingResponseHandler::processMessage(uint32_t slaveId, const Message &message,
+                                                             MasterServer *server)
+{
     // Ping response messages don't generate responses
     return nullptr;
 }
 
-void PingResponseHandler::executeActions(uint32_t slaveId,
-                                         const Message &message,
-                                         MasterServer *server) {
-    const auto *pingRsp =
-        dynamic_cast<const Slave2Master::PingRspMessage *>(&message);
-    if (!pingRsp) return;
+void PingResponseHandler::executeActions(uint32_t slaveId, const Message &message, MasterServer *server)
+{
+    const auto *pingRsp = dynamic_cast<const Slave2Master::PingRspMessage *>(&message);
+    if (!pingRsp)
+        return;
 
-    elog_v("PingResponseHandler",
-           "Received ping response from slave 0x%08X (seq=%d)", slaveId,
+    elog_v("PingResponseHandler", "Received ping response from slave 0x%08X (seq=%d)", slaveId,
            pingRsp->sequenceNumber);
 
     server->getDeviceManager().updateDeviceLastSeen(slaveId);
 
     // Update ping session success count
-    for (auto &session : server->activePingSessions) {
-        if (session.targetId == slaveId) {
+    for (auto &session : server->activePingSessions)
+    {
+        if (session.targetId == slaveId)
+        {
             session.successCount++;
             break;
         }
     }
 
     // 移除相应的待处理命令
-    server->removePendingCommand(
-        slaveId, static_cast<uint8_t>(Master2SlaveMessageId::PING_REQ_MSG));
+    server->removePendingCommand(slaveId, static_cast<uint8_t>(Master2SlaveMessageId::PING_REQ_MSG));
 }

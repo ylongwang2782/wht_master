@@ -10,14 +10,16 @@ using namespace WhtsProtocol;
 extern void UWB_Task_Init(void);
 extern void UDP_Task_Init(void);
 
-extern "C" int main_app(void) {
-    UWB_Task_Init();    // 初始化UWB通信任务
-    UDP_Task_Init();    // 初始化UDP通信任务
+extern "C" int main_app(void)
+{
+    UWB_Task_Init(); // 初始化UWB通信任务
+    UDP_Task_Init(); // 初始化UDP通信任务
 
     MasterServer masterServer;
     masterServer.run();
 
-    for (;;) {
+    for (;;)
+    {
         HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_0);
         elog_v("master_app", "Hello World");
         osDelay(MAIN_LOOP_DELAY_MS);
