@@ -166,14 +166,18 @@ std::unique_ptr<Message> ProtocolProcessor::createMessage(PacketId packetId,
                 case Master2SlaveMessageId::SYNC_MSG:
                     return std::make_unique<Master2Slave::SyncMessage>();
                 case Master2SlaveMessageId::SET_TIME_MSG:
+                    // DEPRECATED: Merged into unified TDMA sync message
                     return std::make_unique<Master2Slave::SetTimeMessage>();
                 case Master2SlaveMessageId::CONDUCTION_CFG_MSG:
+                    // DEPRECATED: Merged into unified TDMA sync message
                     return std::make_unique<
                         Master2Slave::ConductionConfigMessage>();
                 case Master2SlaveMessageId::RESISTANCE_CFG_MSG:
+                    // DEPRECATED: Merged into unified TDMA sync message
                     return std::make_unique<
                         Master2Slave::ResistanceConfigMessage>();
                 case Master2SlaveMessageId::CLIP_CFG_MSG:
+                    // DEPRECATED: Merged into unified TDMA sync message
                     return std::make_unique<Master2Slave::ClipConfigMessage>();
                 // Note: READ_COND_DATA_MSG, READ_RES_DATA_MSG, READ_CLIP_DATA_MSG
                 // have been deprecated in favor of push-based data collection
@@ -185,6 +189,7 @@ std::unique_ptr<Message> ProtocolProcessor::createMessage(PacketId packetId,
                     return std::make_unique<
                         Master2Slave::ShortIdAssignMessage>();
                 case Master2SlaveMessageId::SLAVE_CONTROL_MSG:
+                    // DEPRECATED: Merged into unified TDMA sync message
                     return std::make_unique<Master2Slave::SlaveControlMessage>();
             }
             break;

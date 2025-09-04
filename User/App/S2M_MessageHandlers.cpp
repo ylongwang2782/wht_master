@@ -103,26 +103,28 @@ void SetTimeResponseHandler::executeActions(uint32_t slaveId,
     if (!setTimeRspMsg) return;
 
     elog_i("SetTimeResponseHandler",
-           "Received set time response from device 0x%08X (status=%d, timestamp=%lu)",
+           "Received set time response from device 0x%08X (status=%d, timestamp=%lu) - DEPRECATED, handled via TDMA sync",
            slaveId, setTimeRspMsg->status, (unsigned long)setTimeRspMsg->timestamp);
 
-    // 标记时间同步响应
+    // DEPRECATED: SetTime messages have been merged into unified TDMA sync message
+    // Only keep essential device management for compatibility
+    server->getDeviceManager().updateDeviceLastSeen(slaveId);
+    
+    // Keep time sync tracking for compatibility with existing code
     bool success = (setTimeRspMsg->status == 0);
     server->markTimeSyncResponse(slaveId, success);
 
     if (success) {
-        elog_i("SetTimeResponseHandler",
-               "Device 0x%08X time synchronization successful", slaveId);
+        elog_d("SetTimeResponseHandler",
+               "Device 0x%08X time synchronization successful (now handled via TDMA sync)", slaveId);
     } else {
-        elog_w("SetTimeResponseHandler",
-               "Device 0x%08X time synchronization failed (status=%d)",
+        elog_d("SetTimeResponseHandler",
+               "Device 0x%08X time synchronization failed (status=%d) - now handled via TDMA sync",
                slaveId, setTimeRspMsg->status);
     }
 
-    // 移除相应的待处理命令，防止重试
-    server->removePendingCommand(
-        slaveId,
-        static_cast<uint8_t>(Master2SlaveMessageId::SET_TIME_MSG));
+    // Note: No longer removing pending commands since individual time sync messages are deprecated
+    elog_d("SetTimeResponseHandler", "Time sync response processed (time synchronization now handled via TDMA sync messages)");
 }
 
 // Conduction Config Response Handler
@@ -141,20 +143,20 @@ void ConductionConfigResponseHandler::executeActions(uint32_t slaveId,
     if (!rspMsg) return;
 
     elog_v("ConductionConfigResponseHandler",
-           "Received conduction config response from slave 0x%08X, status: %d",
+           "Received conduction config response from slave 0x%08X, status: %d (DEPRECATED - handled via TDMA sync)",
            slaveId, rspMsg->status);
 
+    // DEPRECATED: Individual config messages have been merged into unified TDMA sync message
+    // Only keep essential device management and backend response tracking
     server->getDeviceManager().addSlave(slaveId);
     server->getDeviceManager().updateDeviceLastSeen(slaveId);
 
-    // Handle slave config response for backend tracking
+    // Keep backend tracking for compatibility
     server->handleSlaveConfigResponse(slaveId, message.getMessageId(),
                                       rspMsg->status);
 
-    // 移除相应的待处理命令
-    server->removePendingCommand(
-        slaveId,
-        static_cast<uint8_t>(Master2SlaveMessageId::CONDUCTION_CFG_MSG));
+    // Note: No longer removing pending commands since individual config messages are deprecated
+    elog_d("ConductionConfigResponseHandler", "Config response processed (configuration now handled via TDMA sync messages)");
 }
 
 // Resistance Config Response Handler
@@ -173,20 +175,20 @@ void ResistanceConfigResponseHandler::executeActions(uint32_t slaveId,
     if (!rspMsg) return;
 
     elog_v("ResistanceConfigResponseHandler",
-           "Received resistance config response from slave 0x%08X, status: %d",
+           "Received resistance config response from slave 0x%08X, status: %d (DEPRECATED - handled via TDMA sync)",
            slaveId, rspMsg->status);
 
+    // DEPRECATED: Individual config messages have been merged into unified TDMA sync message
+    // Only keep essential device management and backend response tracking
     server->getDeviceManager().addSlave(slaveId);
     server->getDeviceManager().updateDeviceLastSeen(slaveId);
 
-    // Handle slave config response for backend tracking
+    // Keep backend tracking for compatibility
     server->handleSlaveConfigResponse(slaveId, message.getMessageId(),
                                       rspMsg->status);
 
-    // 移除相应的待处理命令
-    server->removePendingCommand(
-        slaveId,
-        static_cast<uint8_t>(Master2SlaveMessageId::RESISTANCE_CFG_MSG));
+    // Note: No longer removing pending commands since individual config messages are deprecated
+    elog_d("ResistanceConfigResponseHandler", "Config response processed (configuration now handled via TDMA sync messages)");
 }
 
 // Clip Config Response Handler
@@ -204,19 +206,20 @@ void ClipConfigResponseHandler::executeActions(uint32_t slaveId,
     if (!rspMsg) return;
 
     elog_v("ClipConfigResponseHandler",
-           "Received clip config response from slave 0x%08X, status: %d",
+           "Received clip config response from slave 0x%08X, status: %d (DEPRECATED - handled via TDMA sync)",
            slaveId, rspMsg->status);
 
+    // DEPRECATED: Individual config messages have been merged into unified TDMA sync message
+    // Only keep essential device management and backend response tracking
     server->getDeviceManager().addSlave(slaveId);
     server->getDeviceManager().updateDeviceLastSeen(slaveId);
 
-    // Handle slave config response for backend tracking
+    // Keep backend tracking for compatibility
     server->handleSlaveConfigResponse(slaveId, message.getMessageId(),
                                       rspMsg->status);
 
-    // 移除相应的待处理命令
-    server->removePendingCommand(
-        slaveId, static_cast<uint8_t>(Master2SlaveMessageId::CLIP_CFG_MSG));
+    // Note: No longer removing pending commands since individual config messages are deprecated
+    elog_d("ClipConfigResponseHandler", "Config response processed (configuration now handled via TDMA sync messages)");
 }
 
 // Reset Response Handler
@@ -297,31 +300,31 @@ void SlaveControlResponseHandler::executeActions(uint32_t slaveId,
     if (!controlRsp) return;
 
     elog_v("SlaveControlResponseHandler",
-           "Received slave control response from slave 0x%08X, status: %d",
+           "Received slave control response from slave 0x%08X, status: %d (DEPRECATED - handled via TDMA sync)",
            slaveId, static_cast<int>(controlRsp->status));
 
+    // DEPRECATED: Individual SlaveControl messages have been merged into unified TDMA sync message
+    // Only keep essential device management and response tracking for compatibility
     server->getDeviceManager().updateDeviceLastSeen(slaveId);
 
     // 根据响应状态处理
     bool success = (controlRsp->status == Slave2Master::ResponseStatusCode::SUCCESS);
     
     if (success) {
-        elog_i("SlaveControlResponseHandler",
-               "Slave 0x%08X control command executed successfully", slaveId);
+        elog_d("SlaveControlResponseHandler",
+               "Slave 0x%08X control command executed successfully (now handled via TDMA sync)", slaveId);
 
-        // 标记从机控制响应已收到
+        // Keep for compatibility with existing tracking mechanisms
         server->getDeviceManager().markSlaveControlResponseReceived(slaveId);
     } else {
-        elog_w("SlaveControlResponseHandler",
-               "Slave 0x%08X control command failed with status: %d", slaveId,
+        elog_d("SlaveControlResponseHandler",
+               "Slave 0x%08X control command failed with status: %d (now handled via TDMA sync)", slaveId,
                static_cast<int>(controlRsp->status));
     }
     
-    // 标记控制响应
+    // Keep control response tracking for compatibility
     server->markControlResponse(slaveId, success);
 
-    // 移除相应的待处理命令
-    server->removePendingCommand(
-        slaveId,
-        static_cast<uint8_t>(Master2SlaveMessageId::SLAVE_CONTROL_MSG));
+    // Note: No longer removing pending commands since individual control messages are deprecated
+    elog_d("SlaveControlResponseHandler", "Control response processed (control now handled via TDMA sync messages)");
 }

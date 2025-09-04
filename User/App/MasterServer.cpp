@@ -845,101 +845,23 @@ void MasterServer::startSlaveDataCollection() {
     // 获取所有已连接的从机
     auto connectedSlaves = dm.getConnectedSlaves();
 
-    // 确定当前运行模式
-    uint8_t currentMode = dm.getCurrentMode();
-    Master2Slave::SlaveRunMode runMode;
-    switch (currentMode) {
-        case MODE_CONDUCTION:
-            runMode = Master2Slave::SlaveRunMode::CONDUCTION_TEST;
-            break;
-        case MODE_RESISTANCE:
-            runMode = Master2Slave::SlaveRunMode::RESISTANCE_TEST;
-            break;
-        case MODE_CLIP:
-            runMode = Master2Slave::SlaveRunMode::CLIP_TEST;
-            break;
-        default:
-            elog_w(TAG, "Unsupported mode: %d", currentMode);
-            return;
-    }
-
     elog_i(TAG, "Found %d connected slaves for data collection start",
            static_cast<int>(connectedSlaves.size()));
 
-    // 在发送启动指令前，确保所有从机都已经时间同步
-    elog_i(TAG,
-           "Ensuring all slaves are time synchronized before starting data "
-           "collection");
-    if (!ensureAllSlavesTimeSynced()) {
-        elog_w(TAG,
-               "Time synchronization failed for some slaves, but continuing "
-               "with data collection");
+    // DEPRECATED: Individual SlaveControl messages have been merged into unified TDMA sync message
+    // Data collection control is now handled automatically through periodic sync messages
+    elog_i(TAG, "Data collection control is now handled via TDMA sync messages - no individual commands sent");
+    
+    // Enable TDMA sync message broadcasting by marking initial time sync as completed
+    // In the new unified design, time synchronization is handled by TDMA sync messages
+    if (!initialTimeSyncCompleted) {
+        initialTimeSyncCompleted = true;
+        elog_i(TAG, "Enabled TDMA sync message broadcasting - time sync and control will be handled automatically");
     }
-
-    // 计算延迟启动时间：当前时间 + 同步启动延迟
-    uint64_t currentTimeUs = hal_hptimer_get_us();
-    uint64_t startTimeUs = currentTimeUs + SYNC_START_DELAY_US;    // 同步启动延迟
-
-    elog_i(TAG,
-           "Calculated synchronized start time: %lu us (current: %lu us, "
-           "delay: 1000ms)",
-           (unsigned long)startTimeUs, (unsigned long)currentTimeUs);
-
-    // 清空之前的控制请求
-    clearControlRequests();
-
-    // 向所有从机发送启动控制命令（延迟启动，确保同步）
-    int commandsSent = 0;
-    std::vector<uint32_t> targetSlaves;
-
-    for (uint32_t slaveId : connectedSlaves) {
-        if (dm.hasSlaveConfig(slaveId)) {
-            auto controlCmd =
-                std::make_unique<Master2Slave::SlaveControlMessage>();
-            controlCmd->mode = runMode;
-            controlCmd->enable = CONTROL_ENABLE;    // 启动
-            controlCmd->startTime = startTimeUs;    // 设置同步启动时间
-
-            elog_i(TAG,
-                   "Sending start control command to slave 0x%08X (mode: %d, "
-                   "enable: %d, startTime: %lu us)",
-                   slaveId, static_cast<int>(runMode), 1,
-                   (unsigned long)startTimeUs);
-
-            // 添加控制请求跟踪
-            addControlRequest(slaveId, startTimeUs);
-
-            sendCommandToSlaveWithRetry(slaveId, std::move(controlCmd), DEFAULT_MAX_RETRIES);
-            elog_i(TAG, "Sent start control command to slave 0x%08X", slaveId);
-            commandsSent++;
-            targetSlaves.push_back(slaveId);
-        } else {
-            elog_w(TAG, "Slave 0x%08X is connected but has no config", slaveId);
-        }
-    }
-
-    elog_i(TAG, "Slave data collection start commands sent to %d/%d slaves",
-           commandsSent, static_cast<int>(connectedSlaves.size()));
-
-    // 等待所有从机响应
-    if (!targetSlaves.empty()) {
-        elog_i(TAG, "Waiting for control responses from %d slaves...",
-               static_cast<int>(targetSlaves.size()));
-
-        bool allSuccess =
-            waitForAllControlResponses(targetSlaves, CONTROL_RESPONSE_TIMEOUT_MS);    // 等待控制响应
-
-        if (allSuccess) {
-            elog_i(TAG, "All slaves confirmed control commands successfully");
-        } else {
-            elog_w(TAG,
-                   "Some slaves failed to confirm control commands, but "
-                   "continuing");
-        }
-    }
-
-    // 清理控制请求
-    clearControlRequests();
+    
+    // The actual start/stop control will be handled by the unified sync messages
+    // which are sent periodically by processTimeSync() method
+    elog_v(TAG, "Slaves will receive start commands via next TDMA sync message broadcast");
 }
 
 void MasterServer::stopSlaveDataCollection() {
@@ -951,26 +873,13 @@ void MasterServer::stopSlaveDataCollection() {
     elog_i(TAG, "Found %d connected slaves for data collection stop",
            static_cast<int>(connectedSlaves.size()));
 
-    // 向所有从机发送停止控制命令
-    int commandsSent = 0;
-    for (uint32_t slaveId : connectedSlaves) {
-        if (dm.hasSlaveConfig(slaveId)) {
-            auto controlCmd =
-                std::make_unique<Master2Slave::SlaveControlMessage>();
-            controlCmd->mode =
-                Master2Slave::SlaveRunMode::CONDUCTION_TEST;    // 模式不重要
-            controlCmd->enable = CONTROL_DISABLE;               // 停止
-
-            sendCommandToSlaveWithRetry(slaveId, std::move(controlCmd), DEFAULT_MAX_RETRIES);
-            elog_i(TAG, "Sent stop control command to slave 0x%08X", slaveId);
-            commandsSent++;
-        } else {
-            elog_w(TAG, "Slave 0x%08X is connected but has no config", slaveId);
-        }
-    }
-
-    elog_i(TAG, "Slave data collection stop commands sent to %d/%d slaves",
-           commandsSent, static_cast<int>(connectedSlaves.size()));
+    // DEPRECATED: Individual SlaveControl messages have been merged into unified TDMA sync message
+    // Data collection control is now handled automatically through periodic sync messages
+    elog_i(TAG, "Data collection control is now handled via TDMA sync messages - no individual commands sent");
+    
+    // The actual start/stop control will be handled by the unified sync messages
+    // which are sent periodically by processTimeSync() method
+    elog_v(TAG, "Slaves will receive stop commands via next TDMA sync message broadcast");
 }
 
 void MasterServer::processTimeSync() {
@@ -1132,31 +1041,12 @@ bool MasterServer::ensureAllSlavesTimeSynced() {
 }
 
 bool MasterServer::sendSetTimeToSlave(uint32_t slaveId) {
-    // 创建SetTime消息
-    auto setTimeCmd = std::make_unique<Master2Slave::SetTimeMessage>();
-    // 将当前时间转换为微秒时间戳
-    uint64_t timestampUs = hal_hptimer_get_us();
-    setTimeCmd->timestamp = timestampUs;
-
-    elog_i(TAG, "Sending set time message to slave 0x%08X (timestamp=%lu us)",
-           slaveId, (unsigned long)timestampUs);
-
-    // 添加时间同步请求跟踪
-    addTimeSyncRequest(slaveId, timestampUs);
-
-    // 发送命令
-    sendCommandToSlaveWithRetry(slaveId, std::move(setTimeCmd), DEFAULT_MAX_RETRIES);
-
-    // 等待响应
-    bool success = waitForTimeSyncResponse(slaveId, TIME_SYNC_TIMEOUT_MS);    // 等待时间同步响应
-
-    if (success) {
-        // elog_i(TAG, "Time sync successful for slave 0x%08X", slaveId);
-    } else {
-        elog_w(TAG, "Time sync failed or timeout for slave 0x%08X", slaveId);
-    }
-
-    return success;
+    // DEPRECATED: SetTime message has been merged into unified TDMA sync message
+    // Time synchronization is now handled automatically through periodic sync messages
+    elog_d(TAG, "SetTime message deprecated - time sync handled via TDMA sync messages for slave 0x%08X", slaveId);
+    
+    // Return true to maintain compatibility with existing code flow
+    return true;
 }
 
 // 时间同步响应管理方法
