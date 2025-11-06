@@ -4,6 +4,7 @@
 #include "elog.h"
 #include "udp_task.h"
 #include "uwb_task.h"
+#include <memory>
 
 using namespace WhtsProtocol;
 
@@ -15,8 +16,9 @@ extern "C" int main_app(void)
     UWB_Task_Init(); // 初始化UWB通信任务
     UDP_Task_Init(); // 初始化UDP通信任务
 
-    MasterServer masterServer;
-    masterServer.run();
+    // 在堆上创建MasterServer对象，避免栈溢出
+    auto masterServer = std::make_unique<MasterServer>();
+    masterServer->run();
 
     for (;;)
     {

@@ -1,6 +1,7 @@
 #include "uwb_task.h"
 
 #include "cmsis_os2.h"
+#include <memory>
 
 #if UWB_CHIP_TYPE_DW1000
 #include "deca_device_api.h"
@@ -201,21 +202,23 @@ static void uwb_comm_task(void *argument)
 static void uwb_comm_task(void *argument)
 {
     static const char *TAG = "uwb_comm";
-    uwb_tx_msg_t tx_msg;
-    uwb_rx_msg_t rx_msg;
 
-    CX310<CX310_SlaveSpiAdapter> uwb;
+    auto tx_msg = std::make_unique<uwb_tx_msg_t>();
+    auto rx_msg = std::make_unique<uwb_rx_msg_t>();
+
+    // 在堆上创建CX310对象，避免栈溢出
+    auto uwb = std::make_unique<CX310<CX310_SlaveSpiAdapter>>();
     // 设置全局指针，用于中断处理
-    g_uwb_adapter = &uwb.get_interface();
+    g_uwb_adapter = &uwb->get_interface();
 
     std::vector<uint8_t> buffer = {0};
 
-    if (uwb.init())
+    if (uwb->init())
     {
         elog_i(TAG, "uwb.init success");
     }
     osDelay(3);
-    uwb.set_recv_mode();
+    uwb->set_recv_mode();
 
     for (;;)
     {
@@ -225,27 +228,27 @@ static void uwb_comm_task(void *argument)
             // 从队列获取发送消息
             if (osMessageQueueGet(uwb_txQueue, &tx_msg, NULL, 0) == osOK)
             {
-                switch (tx_msg.type)
+                switch (tx_msg->type)
                 {
                 case UWB_MSG_TYPE_SEND_DATA:
                     // 发送UWB数据
                     {
-                        std::vector<uint8_t> tx_data(tx_msg.data, tx_msg.data + tx_msg.data_len);
+                        std::vector<uint8_t> tx_data(tx_msg->data, tx_msg->data + tx_msg->data_len);
                         elog_i(TAG, "tx begin");
-                        uwb.update();
-                        uwb.data_transmit(tx_data);
+                        uwb->update();
+                        uwb->data_transmit(tx_data);
                         // 发送完成后重新启动接收
                         // uwb.set_recv_mode();
                     }
                     break;
                 case UWB_MSG_TYPE_SET_CHANNEL:
                     // 设置UWB信道
-                    if (tx_msg.data_len >= 1)
+                    if (tx_msg->data_len >= 1)
                     {
-                        uint8_t channel = tx_msg.data[0];
+                        uint8_t channel = tx_msg->data[0];
                         elog_i(TAG, "Setting UWB channel to %d", channel);
-                        uwb.update();
-                        if (uwb.set_channel(channel))
+                        uwb->update();
+                        if (uwb->set_channel(channel))
                         {
                             elog_i(TAG, "UWB channel set to %d successfully", channel);
                         }
@@ -254,34 +257,34 @@ static void uwb_comm_task(void *argument)
                             elog_e(TAG, "Failed to set UWB channel to %d", channel);
                         }
                         // 重新启动接收模式
-                        uwb.set_recv_mode();
+                        uwb->set_recv_mode();
                     }
                     break;
                 case UWB_MSG_TYPE_CONFIG:
                 case UWB_MSG_TYPE_SET_MODE:
                 default:
-                    elog_w(TAG, "Unhandled message type: %d", tx_msg.type);
+                    elog_w(TAG, "Unhandled message type: %d", tx_msg->type);
                     break;
                 }
             }
         }
 
-        if (uwb.get_recv_data(buffer))
+        if (uwb->get_recv_data(buffer))
         {
-            // uwb.set_recv_mode();
+            // uwb->set_recv_mode();
             // elog_w(TAG, "rx size: %d", buffer.size());
-            rx_msg.data_len = buffer.size();
-            for (int i = 0; i < rx_msg.data_len; i++)
+            rx_msg->data_len = buffer.size();
+            for (int i = 0; i < rx_msg->data_len; i++)
             {
-                rx_msg.data[i] = buffer[i];
+                rx_msg->data[i] = buffer[i];
             }
-            rx_msg.timestamp = osKernelGetTickCount();
-            rx_msg.status_reg = 0;
+            rx_msg->timestamp = osKernelGetTickCount();
+            rx_msg->status_reg = 0;
             osMessageQueuePut(uwb_rxQueue, &rx_msg, 0, 0);
             // osDelay(UWB_TX_DELAY_MS);
         }
 
-        uwb.update();
+        uwb->update();
         osDelay(1);
     }
 }
