@@ -979,14 +979,44 @@ void MasterServer::buildSlaveConfigsForSync(Master2Slave::SyncMessage &syncMsg, 
 bool MasterServer::sendToBackend(std::vector<uint8_t> &frame)
 {
     // 数据通过UDP_SendData发送
-    if (UDP_SendData(frame.data(), frame.size(), DEFAULT_BACKEND_IP, DEFAULT_BACKEND_PORT) == 0)
+    int result = UDP_SendData(frame.data(), frame.size(), DEFAULT_BACKEND_IP, DEFAULT_BACKEND_PORT);
+    if (result == 0)
     {
-        elog_i(TAG, "sendToBackend success");
+        elog_v(TAG, "sendToBackend success (%d bytes to %s:%d)", static_cast<int>(frame.size()), DEFAULT_BACKEND_IP,
+               DEFAULT_BACKEND_PORT);
         return true;
     }
     else
     {
-        elog_e(TAG, "sendToBackend failed");
+        // 提供详细的错误诊断
+        const char *errorMsg = "Unknown error";
+        switch (result)
+        {
+        case -1:
+            errorMsg = "Invalid parameters (data=NULL, len=0, len>1016, or ip_addr=NULL)";
+            break;
+        case -2:
+            errorMsg = "Invalid IP address format";
+            break;
+        case -3:
+            errorMsg = "UDP TX queue full or timeout";
+            break;
+        }
+        elog_e(TAG, "sendToBackend failed: %s (error code: %d, size: %d, target: %s:%d)", errorMsg, result,
+               static_cast<int>(frame.size()), DEFAULT_BACKEND_IP, DEFAULT_BACKEND_PORT);
+
+        // 如果是队列满的问题，尝试清理队列
+        if (result == -3)
+        {
+            int queueCount = UDP_GetTxQueueCount();
+            elog_w(TAG, "UDP TX queue count: %d/10, considering queue cleanup", queueCount);
+            if (queueCount >= 8) // 队列接近满时清理
+            {
+                UDP_ClearTxQueue();
+                elog_w(TAG, "UDP TX queue cleared due to congestion");
+            }
+        }
+
         return false;
     }
 }

@@ -226,7 +226,7 @@ static void uwb_comm_task(void *argument)
         if (osSemaphoreAcquire(uwb_txSemaphore, 0) == osOK)
         {
             // 从队列获取发送消息
-            if (osMessageQueueGet(uwb_txQueue, &tx_msg, NULL, 0) == osOK)
+            if (osMessageQueueGet(uwb_txQueue, tx_msg.get(), NULL, 0) == osOK)
             {
                 switch (tx_msg->type)
                 {
@@ -280,7 +280,7 @@ static void uwb_comm_task(void *argument)
             }
             rx_msg->timestamp = osKernelGetTickCount();
             rx_msg->status_reg = 0;
-            osMessageQueuePut(uwb_rxQueue, &rx_msg, 0, 0);
+            osMessageQueuePut(uwb_rxQueue, rx_msg.get(), 0, 0);
             // osDelay(UWB_TX_DELAY_MS);
         }
 
