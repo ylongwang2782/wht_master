@@ -55,7 +55,7 @@ class MasterServer
     /**
      * 后端到主机数据处理任务类 (处理从后端接收到的数据)
      */
-    class SlaveDataProcT : public TaskClassS<2048>
+    class SlaveDataProcT : public TaskClassS<8 * 1024>
     {
       public:
         SlaveDataProcT(MasterServer &parent);

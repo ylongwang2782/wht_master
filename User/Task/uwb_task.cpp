@@ -320,7 +320,7 @@ void UWB_Task_Init(void)
     // 创建UWB通信任务
     const osThreadAttr_t uwbTask_attributes = {
         .name = "uwbCommTask",
-        .stack_size = 512 * 16,
+        .stack_size = 8 * 1024,
         .priority = (osPriority_t)osPriorityNormal,
     };
     uwbCommTaskHandle = osThreadNew(uwb_comm_task, NULL, &uwbTask_attributes);
